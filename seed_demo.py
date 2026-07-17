@@ -7,9 +7,16 @@ that says 'I AM BROKEN'; the agent has to reason to it.
   B. SCHEMA DRIFT         — raw.customers renamed a column; downstream emails go null
   C. STALE / FRESHNESS    — ref.exchange_rates feed frozen for days; USD revenue looks stuck
 """
-from datahub.sdk import DataHubClient, Dataset
+from datahub.sdk import DataHubClient, Dataset, Tag
 
 c = DataHubClient(server="http://localhost:8080")
+
+# Incident vocabulary the agent applies via the MCP add_tags tool. The MCP server validates that a
+# tag entity EXISTS before it can be attached (unlike the raw SDK, which auto-creates), so these
+# tags are part of the catalog setup — defined once, then used by the autonomous agent.
+for _tag, _desc in (("QUARANTINE_INCIDENT", "Root cause of a data incident — quarantined by Lineage Detective."),
+                    ("IMPACTED_BY_INCIDENT", "Downstream asset contaminated by an upstream incident.")):
+    c.entities.upsert(Tag(name=_tag, description=_desc))
 
 
 def make(platform, name, description, props):

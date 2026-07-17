@@ -1,22 +1,14 @@
-"""datahub_evidence.py — the agent's senses.
+"""datahub_evidence.py — the agent's senses, now sourced through DataHub's MCP Server.
 
-Pulls the evidence Lineage Detective reasons over, straight from a live DataHub instance,
-using the real acryl-datahub SDK (verified against v1.6.0.13):
-  - client.lineage.get_lineage(source_urn=..., direction='upstream'|'downstream', max_hops, count)
-  - client.entities.get(urn) -> Entity  (schema, ownership, description, ...)
-
-No metadata is invented — every fact the agent uses comes from DataHub here.
+Every fact Lineage Detective reasons over is pulled from a live DataHub via the MCP tools
+(`get_lineage`, `get_entities`) exposed by `datahub_mcp.MCPDataHub` — no metadata is invented.
+This module turns raw MCP tool output into `NodeEvidence` the LLM can reason over.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from datahub.sdk import DataHubClient
-
-
-def make_client(server: str, token: str | None = None) -> DataHubClient:
-    """Connect to a DataHub GMS server (e.g. http://localhost:8080)."""
-    return DataHubClient(server=server, token=token)
+from datahub_mcp import MCPDataHub
 
 
 @dataclass
@@ -41,16 +33,6 @@ class NodeEvidence:
                 + (f"\n    properties: {props}" if props else ""))
 
 
-def _safe(fn, default=None):
-    """DataHub SDK Entity properties RAISE when an aspect is unset (e.g. `.schema` throws
-    'Schema is not set'). So every field access must be isolated — one unset aspect must not
-    wipe out the fields we did read."""
-    try:
-        return fn()
-    except Exception:
-        return default
-
-
 def _name_from_urn(urn: str) -> str:
     # urn:li:dataset:(urn:li:dataPlatform:bigquery,prod.raw.orders,PROD) -> prod.raw.orders
     inner = urn.rsplit("(", 1)[-1].rstrip(")")
@@ -58,61 +40,58 @@ def _name_from_urn(urn: str) -> str:
     return parts[-2].strip() if len(parts) >= 2 else urn
 
 
-def _entity_facts(client: DataHubClient, urn: str, hops: int) -> NodeEvidence:
-    """Fetch one entity's metadata into NodeEvidence — every field guarded independently, because
-    Entity properties raise on unset aspects. Whatever DataHub exposes we capture; nothing invented."""
-    ev = NodeEvidence(urn=str(urn), hops_from_symptom=hops)
-    e = _safe(lambda: client.entities.get(urn))
-    if e is None:
-        ev.description = "(entity not found in DataHub)"
-        return ev
-    ev.raw = e
-    ev.name = _safe(lambda: e.display_name) or _safe(lambda: e.qualified_name) or _name_from_urn(str(urn))
-    ev.name = str(ev.name) if ev.name else None
-    ev.platform = _safe(lambda: str(e.platform))
-    ev.description = _safe(lambda: e.description)
-    ev.custom_properties = _safe(lambda: dict(e.custom_properties)) or {}
-    owners = _safe(lambda: list(e.owners)) or []
-    ev.owners = [str(_safe(lambda o=o: o.owner_urn, o)) for o in owners]
-    fields = _safe(lambda: list(e.schema.fields)) or []
-    ev.schema_fields = [str(_safe(lambda f=f: f.field_path, f)) for f in fields]
-    return ev
+def _ev_from_entity(e: dict, hops: int) -> NodeEvidence:
+    """Build NodeEvidence from an MCP entity dict (as returned by get_entities/get_lineage).
+    Every field guarded — DataHub only fills the aspects an asset actually has."""
+    urn = e.get("urn", "")
+    props = e.get("properties") or {}
+    editable = e.get("editableProperties") or {}
+    custom = {c.get("key"): c.get("value")
+              for c in (props.get("customProperties") or []) if c.get("key")}
+    owners = []
+    for o in ((e.get("ownership") or {}).get("owners") or []):
+        ou = (o.get("owner") or {}).get("urn") or o.get("ownerUrn")
+        if ou:
+            owners.append(str(ou))
+    schema = e.get("schemaMetadata") or e.get("schema") or {}
+    fields = [f.get("fieldPath") for f in (schema.get("fields") or []) if f.get("fieldPath")]
+    return NodeEvidence(
+        urn=str(urn),
+        name=e.get("name") or props.get("name") or _name_from_urn(str(urn)),
+        platform=(e.get("platform") or {}).get("name"),
+        description=editable.get("description") or props.get("description"),
+        owners=owners,
+        schema_fields=fields,
+        custom_properties=custom,
+        hops_from_symptom=hops,
+        raw=e,
+    )
 
 
-def _walk(client: DataHubClient, start_urn: str, direction: str, max_hops: int,
-          max_nodes: int) -> list[NodeEvidence]:
-    """BFS the lineage graph in one direction, collecting evidence at each node."""
-    seen: set[str] = {str(start_urn)}
-    out: list[NodeEvidence] = [_entity_facts(client, start_urn, 0)]
-    frontier = [(str(start_urn), 0)]
-    while frontier and len(out) < max_nodes:
-        urn, depth = frontier.pop(0)
-        if depth >= max_hops:
-            continue
-        try:
-            results = client.lineage.get_lineage(source_urn=urn, direction=direction,
-                                                 max_hops=1, count=500)
-        except Exception:
-            results = []
-        for r in results:
-            nxt = str(getattr(r, "urn", None) or getattr(r, "source_urn", "") or r)
-            if not nxt or nxt in seen:
-                continue
-            seen.add(nxt)
-            out.append(_entity_facts(client, nxt, depth + 1))
-            frontier.append((nxt, depth + 1))
-            if len(out) >= max_nodes:
-                break
+def _gather(client: MCPDataHub, start_urn: str, upstream: bool, max_hops: int,
+            max_nodes: int) -> list[NodeEvidence]:
+    """Walk lineage in one direction via the MCP get_lineage tool, then enrich every node with
+    full metadata via get_entities (that's where the incident clues — custom properties — live)."""
+    lineage = client.get_lineage(start_urn, upstream=upstream, max_hops=max_hops,
+                                 max_results=max_nodes)
+    urns = [start_urn] + [e.get("urn") for e in lineage if e.get("urn")]
+    urns = list(dict.fromkeys(u for u in urns if u))[:max_nodes]
+    entities = client.get_entities(urns)
+    out: list[NodeEvidence] = []
+    for i, u in enumerate(urns):
+        e = entities.get(u) or {"urn": u}
+        out.append(_ev_from_entity(e, 0 if i == 0 else 1))
     return out
 
 
-def gather_upstream(client: DataHubClient, start_urn: str, max_hops: int = 3,
+def gather_upstream(client: MCPDataHub, start_urn: str, max_hops: int = 3,
                     max_nodes: int = 40) -> list[NodeEvidence]:
     """Walk UPSTREAM from the symptom — a broken metric's cause lives upstream."""
-    return _walk(client, start_urn, "upstream", max_hops, max_nodes)
+    return _gather(client, start_urn, upstream=True, max_hops=max_hops, max_nodes=max_nodes)
 
 
-def gather_downstream(client: DataHubClient, start_urn: str, max_hops: int = 5,
+def gather_downstream(client: MCPDataHub, start_urn: str, max_hops: int = 5,
                       max_nodes: int = 60) -> list[NodeEvidence]:
     """Walk DOWNSTREAM from the root cause — everything it contaminated (the BLAST RADIUS)."""
-    return _walk(client, start_urn, "downstream", max_hops, max_nodes)
+    ev = _gather(client, start_urn, upstream=False, max_hops=max_hops, max_nodes=max_nodes)
+    return [n for n in ev if str(n.urn) != str(start_urn)]  # exclude the root itself

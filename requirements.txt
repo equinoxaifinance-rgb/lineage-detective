@@ -1,4 +1,10 @@
-acryl-datahub>=1.6.0
-anthropic>=0.40.0
+# The agent reaches DataHub through its official MCP Server.
+mcp>=1.0                 # MCP client (the agent speaks MCP over stdio to the DataHub server)
+acryl-datahub>=1.6.0     # DataHub CLI + SDK — used to run `datahub docker quickstart` and seed the demo
+anthropic>=0.40.0        # the frontier reasoning model
 python-dotenv>=1.0.0
-streamlit>=1.59
+streamlit>=1.59          # the visual UI (app.py)
+
+# Also required at runtime (installed separately, not a Python package of this project):
+#   the DataHub MCP server, launched via `uvx mcp-server-datahub@latest`
+#   (install uv: https://docs.astral.sh/uv/ — then the agent auto-launches the server).

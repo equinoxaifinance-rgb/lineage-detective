@@ -14,7 +14,8 @@ import json
 import os
 import sys
 
-from datahub_evidence import make_client, gather_upstream, NodeEvidence
+from datahub_mcp import MCPDataHub
+from datahub_evidence import gather_upstream, NodeEvidence
 
 SYSTEM = """You are Lineage Detective, a data-incident root-cause analyst.
 You are given (a) a symptom reported by a human and (b) real evidence gathered from a DataHub
@@ -44,36 +45,37 @@ def _evidence_block(nodes: list[NodeEvidence]) -> str:
 def investigate(symptom: str, affected_urn: str, *, server: str, token: str | None = None,
                 max_hops: int = 3, model: str = "claude-sonnet-5", act: bool = False) -> dict:
     """Run the full autonomous investigation. Returns the parsed root-cause report.
-    If act=True, the agent quarantines the top high/medium-confidence suspect in DataHub."""
-    client = make_client(server, token)
-    evidence = gather_upstream(client, affected_urn, max_hops=max_hops)
+    If act=True, the agent quarantines the top high/medium-confidence suspect in DataHub.
+    All DataHub access — reads and the write-back — flows through the DataHub MCP Server."""
+    with MCPDataHub(gms_url=server, token=token) as client:
+        evidence = gather_upstream(client, affected_urn, max_hops=max_hops)
 
-    from anthropic import Anthropic
-    llm = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    user = (f"SYMPTOM: {symptom}\n\nAFFECTED ENTITY: {affected_urn}\n\n"
-            f"UPSTREAM EVIDENCE FROM DATAHUB ({len(evidence)} nodes):\n{_evidence_block(evidence)}")
-    resp = llm.messages.create(
-        model=model, max_tokens=1500, system=SYSTEM,
-        messages=[{"role": "user", "content": user}],
-    )
-    # response may contain thinking + text blocks; take the text block(s) only
-    text = "".join(getattr(b, "text", "") for b in resp.content
-                   if getattr(b, "type", None) == "text").strip()
-    if text.startswith("```"):
-        text = text.split("```")[1].removeprefix("json").strip()
-    try:
-        report = json.loads(text)
-    except json.JSONDecodeError:
-        report = {"summary": text, "suspects": [], "missing_evidence": "LLM did not return valid JSON"}
-    report["_evidence_nodes"] = len(evidence)
+        from anthropic import Anthropic
+        llm = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        user = (f"SYMPTOM: {symptom}\n\nAFFECTED ENTITY: {affected_urn}\n\n"
+                f"UPSTREAM EVIDENCE FROM DATAHUB ({len(evidence)} nodes):\n{_evidence_block(evidence)}")
+        resp = llm.messages.create(
+            model=model, max_tokens=1500, system=SYSTEM,
+            messages=[{"role": "user", "content": user}],
+        )
+        # response may contain thinking + text blocks; take the text block(s) only
+        text = "".join(getattr(b, "text", "") for b in resp.content
+                       if getattr(b, "type", None) == "text").strip()
+        if text.startswith("```"):
+            text = text.split("```")[1].removeprefix("json").strip()
+        try:
+            report = json.loads(text)
+        except json.JSONDecodeError:
+            report = {"summary": text, "suspects": [], "missing_evidence": "LLM did not return valid JSON"}
+        report["_evidence_nodes"] = len(evidence)
 
-    # close the loop: act on the finding by quarantining the top confident suspect in DataHub
-    if act and report.get("suspects"):
-        top = report["suspects"][0]
-        if str(top.get("confidence", "")).lower() in {"high", "medium"} and top.get("urn"):
-            from act import quarantine_node, map_and_contain_blast_radius
-            report["action"] = quarantine_node(client, top["urn"], note=top.get("why"))
-            report["blast_radius"] = map_and_contain_blast_radius(client, top["urn"])
+        # close the loop: act on the finding by quarantining the top confident suspect in DataHub
+        if act and report.get("suspects"):
+            top = report["suspects"][0]
+            if str(top.get("confidence", "")).lower() in {"high", "medium"} and top.get("urn"):
+                from act import quarantine_node, map_and_contain_blast_radius
+                report["action"] = quarantine_node(client, top["urn"], note=top.get("why"))
+                report["blast_radius"] = map_and_contain_blast_radius(client, top["urn"])
     return report
 
 
