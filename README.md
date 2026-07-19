@@ -82,6 +82,9 @@ tags were written through MCP).
   the MCP `add_tags` tool, reading each write back to confirm it stuck.
 - **`src/agent.py`** — the investigator. `investigate(symptom, affected_urn, act=True)` → gather
   evidence (MCP) → LLM reasoning → strict-JSON report → contain (MCP) → `render_report()`.
+- **`src/graph_viz.py`** — visualization only (fail-open). Re-walks lineage via MCP `get_lineage`
+  to recover the real edges and renders the graph the agent walked, root cause and blast radius
+  lit up. A failure here never affects the investigation.
 
 ## DataHub features used
 DataHub **MCP Server** (`get_lineage`, `get_entities`, `add_tags`) · bidirectional lineage
