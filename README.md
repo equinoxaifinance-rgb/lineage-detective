@@ -88,7 +88,22 @@ DataHub **MCP Server** (`get_lineage`, `get_entities`, `add_tags`) · bidirectio
 traversal · entity metadata (ownership, description, custom properties, schema) · catalog
 write-back (tags). *(Roadmap: data-quality **assertions** as first-class smoking-gun evidence.)*
 
-## Quickstart
+## Quickstart — one command
+
+**Prerequisites (two things this can't install for you):** Docker Desktop running, and an
+`ANTHROPIC_API_KEY` (set it, or put it in a `.env` file next to the script).
+
+```bash
+# Windows:  double-click run.bat   (or:  python quickstart.py)
+# macOS / Linux:
+./run.sh                                     # or:  python3 quickstart.py
+```
+`quickstart.py` checks prerequisites, installs deps, brings up a local DataHub, plants the demo
+incidents, and launches the web app at http://localhost:8501 — then you just describe a symptom and
+click **Investigate**. It's safe to re-run; each step is skipped if already done.
+
+<details><summary>Manual steps (if you'd rather run them yourself)</summary>
+
 ```bash
 pip install -r requirements.txt
 # install uv (runs the DataHub MCP server): https://docs.astral.sh/uv/
@@ -99,9 +114,22 @@ export DATAHUB_GMS_URL=http://localhost:8080
 python src/agent.py "the revenue dashboard dropped 40%, no errors" \
   "urn:li:dataset:(urn:li:dataPlatform:looker,bi.revenue_overview,PROD)" --act
 ```
+</details>
+
 The agent auto-launches the DataHub MCP server (`uvx mcp-server-datahub@latest`); set
 `DATAHUB_MCP_CMD` to override how it's launched. On DataHub Cloud, point `DATAHUB_GMS_URL` /
 `DATAHUB_GMS_TOKEN` at your tenant instead.
+
+## Use it on your own DataHub (not just the demo)
+The seeded incidents are only a guaranteed showcase — **the agent is not hardcoded to them.** Point
+it at *any* asset in *any* DataHub and it investigates the real lineage and metadata there:
+```bash
+python src/agent.py "<your symptom in plain English>" "<any dataset/dashboard URN>" --act
+```
+It reasons only over what the catalog actually holds: rich metadata (run notes, descriptions,
+ownership) yields a sharp, high-confidence root cause; a sparse catalog yields ranked suspects plus
+an honest "insufficient evidence — check X" rather than a bluff. Verified on incident types it had
+never seen, including a root cause buried mid-chain (not the obvious raw source).
 
 ## Why it's original
 Not a data catalog, not a chatbot over docs — an **autonomous investigator** that drives DataHub's
