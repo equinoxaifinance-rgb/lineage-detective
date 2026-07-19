@@ -1,0 +1,21 @@
+====================================================================
+  LINEAGE DETECTIVE — Autonomous Data-Incident Report
+====================================================================
+Symptom  : USD revenue on the Finance FX dashboard looks frozen for the last few days even though orders are flowing.
+Affected : urn:li:dataPlatform:looker,bi.finance_fx,PROD
+Traced   : 3 upstream entities via DataHub lineage
+
+SUMMARY
+  The Finance FX dashboard's USD revenue is frozen because the upstream exchange_rates reference table has not received new FX rates in 6 days, even though its load job reports 'success'. Since fct_revenue_usd converts revenue using these rates, and orders (the true revenue driver) are still flowing, the frozen USD figures are explained by stale FX rates rather than a break in the order/revenue pipeline itself.
+
+ROOT-CAUSE SUSPECTS (ranked)
+  1. [!!!] [HIGH] prod.ref.exchange_rates   → contact: erin@data-eng
+       why : Explicit run note states the upstream FX vendor feed has been down 6 days; the load job succeeds but writes no new rows, so rates are frozen at 2026-07-05. This directly matches the symptom of frozen USD revenue despite active order flow.
+       next: Check the FX vendor feed connectivity/status, confirm last row timestamp in prod.ref.exchange_rates, and verify whether the ingestion job should fail (not succeed) when zero rows are written; add a row-count or freshness assertion.
+  2. [!! ] [MEDIUM] analytics.marts.fct_revenue_usd   → contact: bob@analytics
+       why : This model applies the (stale) exchange rates to compute USD revenue; even though its own run_status and tests pass, it is structurally downstream of the frozen rates table and will propagate the staleness into the dashboard.
+       next: Confirm the model's tests don't validate FX rate freshness (only structural/null checks), and check if a freshness test on exchange_rates as a source would have caught this.
+
+TO CONFIRM
+  A freshness/row-count assertion on prod.ref.exchange_rates (e.g., 'rows added in last 24h') would conclusively confirm the staleness is the sole cause; also useful would be a run log from the FX vendor ingestion job showing zero rows written on each recent run.
+====================================================================

@@ -1,0 +1,24 @@
+====================================================================
+  LINEAGE DETECTIVE — Autonomous Data-Incident Report
+====================================================================
+Symptom  : The Revenue Overview dashboard shows a ~40% drop in daily revenue since yesterday, no pipeline errors.
+Affected : urn:li:dataPlatform:looker,bi.revenue_overview,PROD
+Traced   : 4 upstream entities via DataHub lineage
+
+SUMMARY
+  The 40% revenue drop matches a documented partial data outage at the raw orders ingestion layer: prod.raw.orders logged that the Orders REST API returned ~40% fewer rows than the 7-day average, and no backfill has been run yet. Downstream dbt models (stg_orders, fct_revenue) 'succeeded' and passed tests, but they are just passing through the shortfall—row-count/volume tests likely weren't in place to catch a proportional drop, only schema/null checks. No pipeline 'errors' were thrown because the job technically completed successfully despite ingesting incomplete data.
+
+ROOT-CAUSE SUSPECTS (ranked)
+  1. [!!!] [HIGH] prod.raw.orders   → contact: alice@data-eng
+       why : Explicit run note states the source API returned ~40% fewer rows than the 7-day average on 2026-07-11 02:00 UTC, and backfill has not yet been run. This magnitude and timing directly matches the reported ~40% revenue drop since yesterday.
+       next: Check Orders REST API status/incident page for the affected window, confirm row counts in prod.raw.orders for 2026-07-11 vs prior days, and verify whether a backfill/reprocess job has been scheduled.
+  2. [!! ] [MEDIUM] analytics.staging.stg_orders   → contact: bob@analytics
+       why : As a 1:1 passthrough of raw.orders, it will silently propagate the same row shortfall. Tests passed, suggesting current tests (e.g., not-null, uniqueness) don't include row-count/volume anomaly detection, so the drop wasn't flagged here even though it's the propagation point.
+       next: Confirm row count in stg_orders for 2026-07-11 matches raw.orders' reduced count, and check whether dbt tests include a volume/freshness threshold test — if not, this is a gap to add.
+  3. [!  ] [LOW] analytics.marts.fct_revenue   → contact: bob@analytics
+       why : This model sums order totals daily; if upstream row volume is down ~40%, the sum will reflect that directly even though the model itself ran successfully and passed its own tests (likely schema/not-null, not volume-based).
+       next: Compare fct_revenue's daily row/sum trend against stg_orders and raw.orders for the same date to confirm the drop is purely inherited, not introduced by transformation logic.
+
+TO CONFIRM
+  A row-count or volume assertion/anomaly-detection result for prod.raw.orders and stg_orders on 2026-07-11 (vs. 7-day baseline) would confirm the outage is the sole cause; also useful would be the Orders REST API provider's incident log timestamp to correlate exactly with the drop window.
+====================================================================

@@ -1,0 +1,24 @@
+====================================================================
+  LINEAGE DETECTIVE — Autonomous Data-Incident Report
+====================================================================
+Symptom  : The Customer 360 dashboard shows contact emails going blank/null for many customers since yesterday, no errors.
+Affected : urn:li:dataPlatform:looker,bi.customer_360,PROD
+Traced   : 4 upstream entities via DataHub lineage
+
+SUMMARY
+  The blank/null emails in Customer 360 trace back to a source schema change: the CRM export table prod.raw.customers had its 'email' column renamed to 'email_address' on 2026-07-11, but downstream mapping logic (stg_customers -> dim_customers -> customer_360) was never updated to reference the new column name. All runs report success because the pipelines complete without error—they just silently resolve email to NULL after the rename, matching the 'no errors' symptom.
+
+ROOT-CAUSE SUSPECTS (ranked)
+  1. [!!!] [HIGH] prod.raw.customers   → contact: dan@data-eng
+       why : The run_status note explicitly documents the root cause: CRM export schema changed, 'email' renamed to 'email_address', and downstream column mappings were not updated, causing email to resolve NULL. This is a direct, timestamped statement of the breaking change and aligns with the 'since yesterday' timing.
+       next: Confirm the exact rename date/time in the CRM export job logs and diff the current schema of prod.raw.customers against the prior day's schema to verify 'email_address' now exists where 'email' used to be.
+  2. [!!!] [HIGH] analytics.staging.stg_customers   → contact: bob@analytics
+       why : This staging model is described as 'maps CRM fields' and sits directly downstream of prod.raw.customers. If it still selects/references the old 'email' column name, it will silently produce NULLs post-rename. Its tests are schema tests only (not null/value checks), which explains why 'tests=passed' despite the underlying data issue.
+       next: Inspect the stg_customers SQL/model definition for a hardcoded 'email' column reference; check dbt compiled SQL or column-level lineage to confirm it never picked up 'email_address'. Add a not_null test on email to catch this going forward.
+  3. [!! ] [MEDIUM] analytics.marts.dim_customers   → contact: bob@analytics
+       why : As the next hop before the dashboard, if it independently references 'email' from raw or performs its own mapping/aliasing, it could also be a point of failure, though the raw table's note suggests the break originates upstream and simply propagates through here.
+       next: Review dim_customers model logic to confirm it just passes through stg_customers.email without its own broken mapping; check column-level lineage to email_address to rule out a second independent break.
+
+TO CONFIRM
+  A column-level lineage view or dbt compiled SQL showing which physical column each model actually selects (email vs email_address) at each hop would confirm exactly where the stale mapping lives. A data quality assertion/run log showing null-rate spikes per table (raw vs staging vs mart) starting 2026-07-11 would pinpoint whether the NULL is introduced at raw ingestion (unlikely, since raw likely still has email_address populated) or first appears at stg_customers.
+====================================================================
