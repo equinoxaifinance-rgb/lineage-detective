@@ -20,7 +20,8 @@ SEGS = [
     ("s2_a", "Describe the symptom in plain English: revenue dropped forty percent, no errors. "
              "The agent walks DataHub's lineage upstream through the MCP get-lineage tool, reads the real metadata at every step, and pinpoints the cause: "
              "the raw orders table, a silent partial load, at high confidence, with the owner to contact. "
-             "Then it acts — quarantining that node through the MCP add-tags tool, and mapping the full blast radius, tagging every downstream table and dashboard the bad data touched."),
+             "It draws the exact lineage it walked — the root cause in red, the blast radius in orange. "
+             "Then it acts — quarantining that node through the MCP add-tags tool, and tagging every downstream table and dashboard the bad data touched."),
     ("s3_b", "It's no one-trick script. A schema change that nulled customer emails? Traced to the source through the same MCP tools, and contained."),
     ("s4_c", "A stale exchange-rate feed freezing revenue? Same story. Found, and quarantined."),
     ("s5_close", "Diagnose. Contain. Map the damage. Autonomously, through DataHub's MCP Server, in the catalog your team already uses. Lineage Detective."),
@@ -112,8 +113,14 @@ with open("vid/audio_list.txt", "w") as f:
         f.write(f"file '{name}.mp3'\n")
 subprocess.run([ff, "-y", "-f", "concat", "-safe", "0", "-i", "audio_list.txt", "-c", "copy", "narration.mp3"],
                cwd="vid", check=True, capture_output=True)
+# mux + a tasteful fade in/out (video + audio), re-encoded at high quality so text stays crisp
+_total = sum(durs.values())
+_fo = max(0.1, _total - 0.6)
 subprocess.run([ff, "-y", "-i", "vid/silent.mp4", "-i", "vid/narration.mp3",
-                "-c:v", "copy", "-c:a", "aac", "-shortest", "vid/lineage_detective_demo.mp4"],
+                "-vf", f"fade=t=in:st=0:d=0.6,fade=t=out:st={_fo:.2f}:d=0.6",
+                "-af", f"afade=t=in:st=0:d=0.6,afade=t=out:st={_fo:.2f}:d=0.6",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
+                "-c:a", "aac", "-shortest", "vid/lineage_detective_demo.mp4"],
                check=True, capture_output=True)
 sz = os.path.getsize("vid/lineage_detective_demo.mp4")
 print(f"DONE: vid/lineage_detective_demo.mp4  ({sz} bytes, ~{round(sum(durs.values()),1)}s)")

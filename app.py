@@ -62,6 +62,14 @@ if st.button("🔍 Investigate", type="primary", use_container_width=True):
             st.stop()
 
     st.success(f"Traced {report.get('_evidence_nodes','?')} upstream entities via DataHub lineage.")
+
+    dot = report.get("lineage_dot")
+    if dot:
+        st.subheader("The lineage the agent walked")
+        st.caption("Recovered live via the MCP `get_lineage` tool. ⚠ symptom · 🔒 root cause quarantined · "
+                   "IMPACTED = downstream blast radius the agent tagged.")
+        st.graphviz_chart(dot, use_container_width=True)
+
     st.subheader("Summary")
     st.write(report.get("summary", ""))
 

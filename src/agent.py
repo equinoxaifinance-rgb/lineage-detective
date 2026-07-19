@@ -76,6 +76,13 @@ def investigate(symptom: str, affected_urn: str, *, server: str, token: str | No
                 from act import quarantine_node, map_and_contain_blast_radius
                 report["action"] = quarantine_node(client, top["urn"], note=top.get("why"))
                 report["blast_radius"] = map_and_contain_blast_radius(client, top["urn"])
+
+        # visualization only (fail-open): recover the lineage graph the agent walked, root cause lit up
+        try:
+            from graph_viz import lineage_dot
+            report["lineage_dot"] = lineage_dot(client, affected_urn, report, max_hops=max_hops)
+        except Exception:
+            report["lineage_dot"] = None
     return report
 
 

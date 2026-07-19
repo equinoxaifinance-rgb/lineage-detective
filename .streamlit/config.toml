@@ -1,0 +1,8 @@
+# Clean look for the demo — hides Streamlit's dev toolbar so it reads as a product,
+# and disables the first-run usage-stats prompt. Keeps the default light theme (the
+# in-app cards/graph are designed for a light background).
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
