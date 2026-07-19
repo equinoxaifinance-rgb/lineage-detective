@@ -14,14 +14,16 @@ os.makedirs("vid", exist_ok=True)
 
 SEGS = [
     ("s1_intro", "When a dashboard breaks, data teams lose hours on one question: where did this go wrong? "
-                 "Lineage Detective answers it autonomously. And this entire project, the agent included, was built by A.I., on DataHub."),
+                 "Lineage Detective answers it autonomously — and it works entirely through DataHub's official MCP Server."),
+    ("s1b_mcp", "Every fact the agent reads and every action it takes goes through DataHub's MCP Server: "
+                "get lineage and get entities to investigate, add tags to act — and each write is read back to confirm it stuck."),
     ("s2_a", "Describe the symptom in plain English: revenue dropped forty percent, no errors. "
-             "The agent walks DataHub's lineage upstream, reads the real metadata at every step, and pinpoints the cause: "
+             "The agent walks DataHub's lineage upstream through the MCP get-lineage tool, reads the real metadata at every step, and pinpoints the cause: "
              "the raw orders table, a silent partial load, at high confidence, with the owner to contact. "
-             "Then it acts. It quarantines that node in DataHub, and maps the full blast radius, tagging every downstream table and dashboard the bad data touched."),
-    ("s3_b", "It's no one-trick script. A schema change that nulled customer emails? Traced to the source, and contained."),
+             "Then it acts — quarantining that node through the MCP add-tags tool, and mapping the full blast radius, tagging every downstream table and dashboard the bad data touched."),
+    ("s3_b", "It's no one-trick script. A schema change that nulled customer emails? Traced to the source through the same MCP tools, and contained."),
     ("s4_c", "A stale exchange-rate feed freezing revenue? Same story. Found, and quarantined."),
-    ("s5_close", "Diagnose. Contain. Map the damage. Autonomously, in the catalog your team already uses. Lineage Detective. Built with DataHub."),
+    ("s5_close", "Diagnose. Contain. Map the damage. Autonomously, through DataHub's MCP Server, in the catalog your team already uses. Lineage Detective."),
 ]
 
 # ---- 1. narration (cache) --------------------------------------------------------
@@ -92,7 +94,9 @@ c_arr = load_ui("cap/03_C_finance.png")
 
 wr = imageio.get_writer("vid/silent.mp4", fps=FPS, codec="libx264", macro_block_size=1, quality=8)
 write_segment(wr, "card", durs["s1_intro"], title="Lineage Detective",
-              sub="Autonomous data-incident root cause  ·  built with DataHub")
+              sub="Autonomous data-incident root cause  ·  via the DataHub MCP Server")
+write_segment(wr, "card", durs["s1b_mcp"], title="DataHub MCP Server",
+              sub="get_lineage   ·   get_entities   ·   add_tags", accent=(59, 130, 246))
 write_segment(wr, "scroll", durs["s2_a"], arr=a_arr)
 write_segment(wr, "scroll", durs["s3_b"], arr=b_arr)
 write_segment(wr, "scroll", durs["s4_c"], arr=c_arr)

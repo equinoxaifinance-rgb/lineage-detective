@@ -30,8 +30,13 @@ EXAMPLES = {
 }
 
 st.title("🕵️ Lineage Detective")
-st.caption("Autonomous data-incident root-cause analysis, built with **DataHub**. "
+st.caption("Autonomous data-incident root-cause analysis, driven through DataHub's **MCP Server**. "
            "Describe the symptom — the agent traces your lineage and finds the cause.")
+st.markdown(
+    "<div style='background:#0b1220;border:1px solid #1e293b;border-radius:8px;padding:8px 12px;"
+    "margin:-4px 0 8px;color:#93c5fd;font-size:0.86rem'>Every fact & every action runs through the "
+    "official DataHub <b>MCP Server</b> — <code>get_lineage</code> · <code>get_entities</code> · "
+    "<code>add_tags</code> (each write read back to confirm).</div>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Connection")
@@ -80,8 +85,9 @@ if st.button("🔍 Investigate", type="primary", use_container_width=True):
         node = action["urn"].rsplit("(", 1)[-1].rstrip(")").split(",")
         node = node[-2] if len(node) >= 2 else action["urn"]
         st.subheader("Autonomous action taken in DataHub")
-        st.markdown(f"🔒 Quarantined **{node}** — tagged `QUARANTINE_INCIDENT` so every downstream "
-                    f"consumer is warned in the catalog they already use.")
+        st.markdown(f"🔒 Quarantined **{node}** via the MCP `add_tags` tool — tagged "
+                    f"`QUARANTINE_INCIDENT` (read back to confirm) so every downstream consumer is "
+                    f"warned in the catalog they already use.")
     br = report.get("blast_radius")
     if br and br.get("impacted_count"):
         st.error(f"💥 **Blast radius: {br['impacted_count']} downstream assets contaminated** "
