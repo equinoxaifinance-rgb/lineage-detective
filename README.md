@@ -115,5 +115,15 @@ available tools only — the DataHub SDK/CLI (`acryl-datahub`), the official Dat
 (`mcp-server-datahub`), the MCP client SDK (`mcp`), the Anthropic SDK, and Streamlit. No
 pre-existing or proprietary code was incorporated.
 
+## Also ships a DataHub Skill (open-source contribution)
+Beyond driving the MCP Server, this repo contributes a **DataHub Skill** in the official
+[`datahub-skills`](https://github.com/datahub-project/datahub-skills) format:
+[`skill/datahub-incident-response/SKILL.md`](skill/datahub-incident-response/SKILL.md). It packages
+the investigate → root-cause → **contain** → map-blast-radius loop as a reusable recipe over the
+DataHub MCP tools (`get_lineage` / `get_entities` / `add_tags`) — the containment-grade sibling of
+the existing read-only `datahub-lineage` skill, offered upstream. So Lineage Detective exercises
+**two** of the hackathon's DataHub agent surfaces: the **MCP Server** (the running agent) and a
+**DataHub Skill** (the reusable recipe).
+
 ## License
 Apache-2.0 — see [LICENSE](LICENSE).
