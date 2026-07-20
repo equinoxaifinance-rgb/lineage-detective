@@ -152,6 +152,13 @@ if __name__ == "__main__":
     p.add_argument("--format", choices=["report", "json"], default="report")
     p.add_argument("--act", action="store_true", help="quarantine the top suspect in DataHub")
     args = p.parse_args()
+    if args.act:  # catalog SETUP on any instance (create-if-missing incident tags); the agent stays pure-MCP
+        try:
+            from setup_vocab import ensure_incident_vocabulary
+            ensure_incident_vocabulary(args.server, token=args.token)
+        except Exception as _e:
+            print(f"[setup] tag vocabulary ensure skipped ({type(_e).__name__}) — "
+                  f"if acting fails, create QUARANTINE_INCIDENT / IMPACTED_BY_INCIDENT once in your catalog.")
     out = investigate(args.symptom, args.affected_urn, server=args.server, token=args.token,
                       max_hops=args.max_hops, act=args.act)
     if args.format == "json":

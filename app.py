@@ -9,6 +9,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import streamlit as st
 from agent import investigate  # noqa: E402
+from setup_vocab import ensure_incident_vocabulary  # noqa: E402  (catalog setup — the agent stays pure-MCP)
+
+
+@st.cache_resource(show_spinner=False)
+def _vocab_ready(server_url: str) -> str:
+    """One-time per server: ensure the incident-tag vocabulary exists (create-if-missing).
+    Fail-soft — diagnosis never needs the tags; only the act step does, and it reports clearly."""
+    try:
+        ensure_incident_vocabulary(server_url)
+        return "ok"
+    except Exception as e:  # unreachable server etc. — investigation may still work via MCP
+        return f"skipped ({type(e).__name__})"
 
 st.set_page_config(page_title="Lineage Detective", page_icon="🕵️", layout="centered")
 
@@ -54,6 +66,7 @@ if st.button("🔍 Investigate", type="primary", use_container_width=True):
     if not os.environ.get("ANTHROPIC_API_KEY"):
         st.error("ANTHROPIC_API_KEY not set in the environment running Streamlit.")
         st.stop()
+    _vocab_ready(server)  # your own DataHub works out of the box: incident tags ensured before acting
     with st.spinner("Walking DataHub lineage upstream and reasoning over the evidence…"):
         try:
             report = investigate(symptom, affected, server=server, max_hops=max_hops, act=True)

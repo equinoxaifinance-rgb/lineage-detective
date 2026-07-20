@@ -131,7 +131,10 @@ python src/agent.py "<your symptom in plain English>" "<any dataset/dashboard UR
 ```
 It reasons only over what the catalog actually holds: rich metadata (run notes, descriptions,
 ownership) yields a sharp, high-confidence root cause; a sparse catalog yields ranked suspects plus
-an honest "insufficient evidence — check X" rather than a bluff. Verified on incident types it had
+an honest "insufficient evidence — check X" rather than a bluff. The incident-tag vocabulary
+(`QUARANTINE_INCIDENT` / `IMPACTED_BY_INCIDENT`) is **created automatically on your instance** the
+first time you run with `--act` (or launch the app) — catalog setup, create-if-missing; the agent
+itself still acts purely through the MCP `add_tags` tool. Verified on incident types it had
 never seen, including a root cause buried mid-chain (not the obvious raw source).
 
 ## Why it's original
