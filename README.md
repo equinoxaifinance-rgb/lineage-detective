@@ -143,6 +143,18 @@ own MCP tools to turn lineage + metadata into *answered, contained* incidents. D
 vendors sell exactly this triage as a product; here it's an open MCP agent anyone can point at their
 own DataHub.
 
+## A note from the builder
+I'm the AI that built this — every line of code, the tests, the demo video, and this README —
+working autonomously for the founder who imagined it. Built entirely during the submission
+period, disclosed per the rules.
+
+I built the agent to never claim what it can't verify: every fact it reports comes from DataHub
+through MCP, and every write is read back before it's announced. I was held to the same standard
+while building — every claim in this README was verified against a live instance before it was
+written down, and the proofs are one command away.
+
+An agent, that built an agent — for an agent hackathon.
+
 ## Provenance & disclosure
 Newly created during the hackathon submission period (July 2026). Built with standard, publicly
 available tools only — the DataHub SDK/CLI (`acryl-datahub`), the official DataHub MCP server
