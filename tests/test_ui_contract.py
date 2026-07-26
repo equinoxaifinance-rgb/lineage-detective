@@ -181,6 +181,10 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn('"ends_at"', VIDEO_BUILDER)
         self.assertIn("Narration timing collision:", VIDEO_BUILDER)
         self.assertIn("Final narration overruns the captured video:", VIDEO_BUILDER)
+        self.assertIn("MAX_SILENCE_SECONDS = 3.0", VIDEO_BUILDER)
+        self.assertIn("silencedetect=noise=-38dB:d=1.0", VIDEO_BUILDER)
+        self.assertIn("Narration left an unsupported visual stretch:", VIDEO_BUILDER)
+        self.assertNotIn("\"I'm Codex.", VIDEO_BUILDER)
 
     def test_completed_autonomous_run_cannot_be_rendered_back_as_review(self):
         autonomous = APP.index("if autonomous_is_current:")

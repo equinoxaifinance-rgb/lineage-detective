@@ -51,11 +51,14 @@ the image that it hashes.
   10, 22, 36, 47, 57, 60, 61, 70, 76, 88, 94, and 100 percent, then reached live lineage,
   diagnosis, exact diff, sandbox receipt, autonomous completion, and verified handoff.
 - Both streams decoded end to end with zero decoder errors. Integrated loudness measured
-  -16.3 LUFS with -1.4 dB true peak.
+  -16.2 LUFS with -0.9 dB true peak. Silence analysis found no unsupported stretch; the
+  longest pause was 2.255 seconds.
 - An independent speech-to-text pass recovered the intended technical claims, including
-  zero rows passing before and all eight rows passing after, plus the human/AI authorship note.
+  the data-engineer/on-call use case, the investigate-to-implementation product difference,
+  controller and verifier internals, zero rows passing before and all eight rows passing after,
+  plus the human/AI authorship note.
 - SHA-256:
-  `b3d7a8595b232e0b08620ee31991cd832e3c333b644ff87f77274363cc666856`
+  `6e0312290a707e536820f4e2e5e206b444de15d516d70d45063a0c078ee323ba`
 
 ## Intentionally not started
 

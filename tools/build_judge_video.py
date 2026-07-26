@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -18,12 +19,14 @@ SCRIPT_FILE = MEDIA / "lineage-detective-narration.json"
 FONT = Path(r"C:\Windows\Fonts\segoeuib.ttf")
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
+MAX_SILENCE_SECONDS = 3.0
 
 VOICE_INSTRUCTIONS = (
     "Warm, grounded, confident documentary narration from a thoughtful AI engineer speaking "
     "directly to human judges. Natural conversational cadence with subtle personality, varied "
     "pacing, and restrained excitement. Never sound like an announcer or corporate training "
-    "video. Use brief natural pauses around important proof. Pronounce Data Hub as two words, "
+    "video. Begin each take immediately. Keep pauses short and conversational; never use a "
+    "dramatic pause between a subject and its name. Pronounce Data Hub as two words, "
     "M C P as individual letters, D B T as individual letters, SQL as sequel, and Bryan as Brian."
 )
 
@@ -61,6 +64,30 @@ def _event_seconds(timeline: list[dict], event: str) -> float:
     raise SystemExit(f"Timeline event missing: {event}")
 
 
+def _long_silences(path: Path) -> list[float]:
+    result = subprocess.run(
+        [
+            FFMPEG,
+            "-hide_banner",
+            "-i",
+            str(path),
+            "-af",
+            "silencedetect=noise=-38dB:d=1.0",
+            "-f",
+            "null",
+            "NUL",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    output = f"{result.stdout}\n{result.stderr}"
+    return [
+        float(value)
+        for value in re.findall(r"silence_duration:\s*([0-9.]+)", output)
+        if float(value) > MAX_SILENCE_SECONDS
+    ]
+
+
 def main() -> None:
     if not RAW.is_file() or not TIMELINE.is_file():
         raise SystemExit("Missing the live recording or its event timeline.")
@@ -89,7 +116,7 @@ def main() -> None:
             "start": 0.1,
             "max": max(5.8, approval - 0.5),
             "text": (
-                "I'm Codex. Bryan directed this; I built it. "
+                "I am Codex, Bryan directed this build, and I built what you are about to see. "
                 "Watch one approval become a verified repair."
             ),
         },
@@ -99,24 +126,35 @@ def main() -> None:
             "max": max(38.0, workflow_complete - approval - 1.0),
             "text": (
                 "Customer Three-Sixty lost its email values, while every pipeline still reports "
-                "success. That click starts the real workflow. Lineage Detective connects to the "
-                "official Data Hub M C P server, walks the live graph, reads schemas, ownership, "
-                "and incident metadata, and grounds model reasoning in those facts. The droid is "
-                "not a fake timer: each state comes from an active connection, evidence read, "
-                "diagnosis, containment, repair, or sandbox callback. The agent writes quarantine "
-                "and impact tags only in model-backed mode, then reads them back before saying "
-                "confirmed. It drafts exact sequel, runs those bytes in an isolated D B T and "
-                "Duck D B workspace, measures the broken baseline, rebuilds the repair, verifies "
-                "the assertion, proves rollback, applies a safe copy, reads the hash back, and "
-                "packages the handoff. A timeout, stale source, failed rollback, or mismatched "
-                "receipt stops the run instead of weakening the claim. This takes seconds because "
-                "it is doing the work, not replaying a canned result: querying the catalog, waiting "
-                "on the model, writing evidence, executing the sandbox, and reading the result back. "
-                "Progress stays visible, and the operator can cancel without corrupting the workspace."
+                "success. This is the moment Lineage Detective is built for: a data engineer on "
+                "call, a broken dashboard, and a pipeline that still says green. Most observability "
+                "tools alert or draw lineage. Lineage Detective closes the loop. It investigates "
+                "through Data Hub, identifies the accountable owner and blast radius, contains the "
+                "incident in the catalog, drafts a bounded repair, proves the exact bytes, and "
+                "prepares implementation. A team chooses it because they get an answer they can "
+                "inspect, not another chatbot claim or a ticket tossed over the wall. That click "
+                "starts the real workflow. The agent connects to the official Data Hub M C P server, "
+                "walks the live graph, reads schemas, ownership, and incident metadata, and grounds "
+                "model reasoning in those facts. Inside, the controller keeps evidence, diagnosis, "
+                "proposal, sandbox receipt, and implementation receipt as separate states. The "
+                "sequel verifier rejects write-capable statements and relation drift. Quarantine "
+                "and impact tags are written only in model-backed mode, then read back before the "
+                "word confirmed appears. The exact sequel runs in an isolated D B T and Duck D B "
+                "workspace. It measures the broken baseline, rebuilds the repair, verifies the "
+                "assertion, proves rollback, checks the hash, and only then unlocks apply or handoff. "
+                "A timeout, stale source, failed rollback, or mismatched receipt stops the run. The "
+                "rail is driven by those real callbacks, not elapsed time. The operator can cancel "
+                "without corrupting the workspace, and the model key never enters this browser."
             ),
         },
         {
-            "name": "03_lineage",
+            "name": "03_result_transition",
+            "start": workflow_complete + 0.1,
+            "max": max(2.0, lineage - workflow_complete - 0.2),
+            "text": "The approved run completed. Inspect what it produced.",
+        },
+        {
+            "name": "04_lineage",
             "start": lineage,
             "max": max(4.0, diagnosis - lineage),
             "text": (
@@ -124,7 +162,7 @@ def main() -> None:
             ),
         },
         {
-            "name": "04_diagnosis",
+            "name": "05_diagnosis",
             "start": diagnosis,
             "max": max(4.5, diff - diagnosis - 1.0),
             "text": (
@@ -133,39 +171,40 @@ def main() -> None:
             ),
         },
         {
-            "name": "05_diff",
+            "name": "06_diff",
             "start": diff,
             "max": max(6.0, receipt - diff - 0.5),
             "text": (
-                "This exact diff is bound by hash from review through implementation."
+                "That exact diff keeps one hash from review through implementation."
             ),
         },
         {
-            "name": "06_receipt",
+            "name": "07_receipt",
             "start": receipt,
             "max": max(6.5, completion - receipt),
             "text": (
-                "The receipt: zero rows passed before. All eight rows passed after. "
+                "The receipt shows zero rows passed before and all eight passed after. "
                 "Rollback and the safe write are confirmed."
             ),
         },
         {
-            "name": "07_completion",
+            "name": "08_completion",
             "start": completion,
             "max": max(4.5, handoff - completion),
             "text": (
-                "One approval completed the bounded path. Cancel and manual review remain available."
+                "One approval completed the path. Cancel and manual review remain available."
             ),
         },
         {
-            "name": "08_personal",
+            "name": "09_personal",
             "start": handoff,
             "max": max(8.0, raw_duration - handoff - 0.4),
             "text": (
-                "Bryan did not write this code. He supplied the direction, tested the product, "
-                "and refused weak proof. I supplied the architecture, implementation, tests, "
-                "and the live evidence you just saw. Human judgment and A I execution made "
-                "Lineage Detective real."
+                "Bryan did not write this code. He brought the direction, tested each version, and "
+                "refused weak proof. I brought the architecture, implementation, tests, and evidence. "
+                "This was not one prompt. His judgment challenged my first answers, and I rebuilt "
+                "them into working code. Human judgment and A I execution made Lineage Detective "
+                "real, together."
             ),
         },
     ]
@@ -311,6 +350,12 @@ def main() -> None:
     subprocess.run(command, check=True)
     if not FINAL.is_file() or FINAL.stat().st_size < 5_000_000:
         raise SystemExit("The final judge video was not produced at release quality.")
+    long_silences = _long_silences(FINAL)
+    if long_silences:
+        raise SystemExit(
+            "Narration left an unsupported visual stretch: "
+            + ", ".join(f"{duration:.3f}s" for duration in long_silences)
+        )
     print(FINAL)
     print(json.dumps(measured, indent=2))
 
