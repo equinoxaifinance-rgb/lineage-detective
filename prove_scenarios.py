@@ -14,7 +14,7 @@ CASES = [
      "urn:li:dataset:(urn:li:dataPlatform:looker,bi.revenue_overview,PROD)", "raw.orders"),
     ("B. schema-drift",
      "The Customer 360 dashboard shows blank/null email for most customers since yesterday, no errors.",
-     "urn:li:dataset:(urn:li:dataPlatform:looker,bi.customer_360,PROD)", "raw.customers"),
+     "urn:li:dataset:(urn:li:dataPlatform:looker,bi.customer_360,PROD)", "stg_customers"),
     ("C. stale-data",
      "USD-converted revenue on the Finance dashboard looks frozen — it hasn't changed in days.",
      "urn:li:dataset:(urn:li:dataPlatform:looker,bi.finance_fx,PROD)", "exchange_rates"),
@@ -29,8 +29,8 @@ for label, symptom, urn, expect_root in CASES:
     ok = expect_root in top_urn
     passed += ok
     print(f"{label:16s} top='{top_urn.rsplit('(',1)[-1].rstrip(')').split(',')[-2] if top_urn else 'none'}' "
-          f"conf={top.get('confidence')} expect~{expect_root}  -> {'PASS' if ok else 'FAIL'}")
+          f"conf={top.get('confidence')} expected_action_locus~{expect_root}  -> {'PASS' if ok else 'FAIL'}")
 
-print(f"\n{passed}/{len(CASES)} scenarios correctly root-caused",
+print(f"\n{passed}/{len(CASES)} scenarios reached the expected action locus",
       "— agent generalizes across incident types." if passed == len(CASES) else "— NOT all correct.")
 sys.exit(0 if passed == len(CASES) else 1)

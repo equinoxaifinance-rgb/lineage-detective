@@ -13,24 +13,87 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import date
+from typing import Any
 
 from datahub_mcp import MCPDataHub
 from datahub_evidence import gather_upstream, NodeEvidence
 
 SYSTEM = """You are Lineage Detective, a data-incident root-cause analyst.
-You are given (a) a symptom reported by a human and (b) real evidence gathered from a DataHub
-metadata catalog: the affected dataset and its UPSTREAM lineage, each node with owner/schema/
-description. Reason like an on-call data engineer.
+You are given (a) a symptom reported by a human and (b) REAL evidence gathered from a DataHub
+metadata catalog: the affected dataset and its UPSTREAM lineage. For each node you may see its
+schema (column names + types), owner, description, and operational properties (row counts, load
+timestamps, run statuses, data-quality test coverage, null rates, refresh cadence). Reason like an
+on-call data engineer.
+
+THE CAUSE IS NEVER STATED IN PLAIN LANGUAGE. No property tells you the answer — you must DERIVE it
+by reasoning over the signals:
+- Volume: a node whose current row count is far below its own prior/baseline average is a silent
+  partial load — a real data loss even when run_status is 'success'. Compare the numbers.
+- Schema drift: diff schemas across hops. A column that appears upstream under a NEW name but is
+  still selected under its OLD name downstream is a broken mapping; a spiking null rate on that
+  downstream column corroborates it. Distinguish the upstream rename (the trigger) from the
+  downstream mapping that still selects the old field (the immediate repair locus). Rank the broken
+  mapping first when it is the safe actionable target, and name the upstream rename as its trigger.
+- Freshness: a source whose latest data date is stale, or that added ~0 rows across recent runs
+  despite a daily cadence and a 'success' status, is a frozen/stale feed.
+- 'success' status does NOT mean healthy. Look for silent data problems, and note where a guarding
+  test (volume / freshness / not_null) is absent — that absence is why the failure went undetected.
+- The root cause is usually the FARTHEST-UPSTREAM node that FIRST exhibits the anomaly; downstream
+  nodes that merely pass it through are impacts, not causes.
 
 Rules:
-- Use ONLY the evidence provided. Do not invent tables, owners, or failures not present.
-- Rank the 1-3 most likely root-cause locations in the upstream graph, each with WHY the evidence
-  points there and WHAT to check next.
+- Use ONLY the evidence provided. Do not invent tables, owners, numbers, or failures.
+- Rank the 1-3 most likely root-cause locations, each with WHY the evidence points there — cite the
+  SPECIFIC signal you reasoned from (the row-count delta, the schema mismatch, the freshness gap) —
+  and WHAT to check next.
 - Name the owner to contact for the top suspect if known.
 - If the evidence is insufficient, say exactly what additional signal (an assertion, a run log)
   would resolve it. Never bluff a confident answer the evidence can't support.
 Return STRICT JSON: {"summary": str, "suspects": [{"urn": str, "why": str, "check_next": str,
 "owner": str|null, "confidence": "high"|"medium"|"low"}], "missing_evidence": str|null}"""
+
+
+def _extract_json_report(text: str) -> dict | None:
+    """Tolerate a Markdown fence or a short model preamble, never silently invent a report."""
+    value = (text or "").strip()
+    if value.startswith("```"):
+        parts = value.split("```", 2)
+        value = parts[1].removeprefix("json").strip() if len(parts) > 1 else value
+    if not value.startswith("{"):
+        first, last = value.find("{"), value.rfind("}")
+        value = value[first:last + 1] if first >= 0 and last > first else value
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _reason_over_evidence(llm, *, model: str, user: str) -> dict:
+    """Make at most one corrective retry for a malformed structured response.
+
+    The retry only asks for the same report in valid JSON; it does not add facts or change the
+    evidence. If it still fails we return an explicit insufficient-format report instead of
+    pretending the incident was diagnosed.
+    """
+    messages = [{"role": "user", "content": user}]
+    for attempt in range(2):
+        resp = llm.messages.create(model=model, max_tokens=1500, system=SYSTEM, messages=messages)
+        text = "".join(getattr(block, "text", "") for block in resp.content
+                       if getattr(block, "type", None) == "text").strip()
+        report = _extract_json_report(text)
+        if report is not None:
+            return report
+        if attempt == 0:
+            messages.append({"role": "user", "content": (
+                "Your last response was not parseable JSON. Return the same evidence-grounded report "
+                "again as one JSON object only, with exactly the required keys and no Markdown.")})
+    return {
+        "summary": "The evidence was gathered, but the reasoning response could not be parsed as the required report.",
+        "suspects": [],
+        "missing_evidence": "Retry the investigation; no containment or repair was performed from an unparseable response.",
+    }
 
 
 def _evidence_block(nodes: list[NodeEvidence]) -> str:
@@ -42,47 +105,183 @@ def _evidence_block(nodes: list[NodeEvidence]) -> str:
     return "\n".join(lines)
 
 
+def _number(value: Any) -> float | None:
+    """Parse a catalog numeric property without treating malformed metadata as zero."""
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _evidence_only_report(nodes: list[NodeEvidence]) -> dict:
+    """Return a deterministic report from *observed* catalog signals.
+
+    This is deliberately narrower than the model-backed investigator.  It is a
+    no-key judge route, not an imitation LLM: every rule below names the exact
+    DataHub property which triggered it and declines a diagnosis where no
+    deterministic signal exists.
+    """
+    suspects: list[dict] = []
+    for index, node in enumerate(nodes):
+        props = {str(k).lower(): v for k, v in node.custom_properties.items()}
+        latest_key = next((k for k in props if "rows" in k and ("latest" in k or "current" in k)), None)
+        baseline_key = next((k for k in props if "rows" in k and ("prior" in k or "baseline" in k or "avg" in k)), None)
+        latest = _number(props.get(latest_key)) if latest_key else None
+        baseline = _number(props.get(baseline_key)) if baseline_key else None
+        if latest is not None and baseline and baseline > 0:
+            drop = (baseline - latest) / baseline
+            if drop >= 0.20:
+                test_key = next((k for k in props if "volume" in k and "test" in k), None)
+                test_note = (f"; {test_key}={props[test_key]}" if test_key else "")
+                suspects.append({
+                    "urn": node.urn,
+                    "why": (f"{latest_key}={latest:,.0f} is {drop:.0%} below "
+                            f"{baseline_key}={baseline:,.0f}{test_note}."),
+                    "check_next": "Confirm the source extract and row-count history before a governed backfill.",
+                    "owner": ", ".join(node.owners) or node.custom_properties.get("owner"),
+                    "confidence": "high" if drop >= 0.35 else "medium",
+                    "_score": 100 + drop,
+                })
+
+        null_key = next((k for k in props if "null_rate" in k and ("current" in k or "latest" in k)), None)
+        prior_null_key = next((k for k in props if "null_rate" in k and ("prior" in k or "baseline" in k)), None)
+        current_null = _number(props.get(null_key)) if null_key else None
+        prior_null = _number(props.get(prior_null_key)) if prior_null_key else None
+        if current_null is not None and current_null >= 0.80 and (prior_null is None or current_null - prior_null >= 0.30):
+            upstream_columns = set()
+            for upstream in nodes[index + 1:]:
+                upstream_columns.update(str(field) for field in upstream.schema_fields)
+            local_columns = set(str(field) for field in node.schema_fields)
+            possible_renames = sorted(
+                column for column in upstream_columns - local_columns
+                if any(column.startswith(local + "_") for local in local_columns)
+            )
+            rename_note = (f" Upstream exposes possible renamed field(s): {', '.join(possible_renames[:3])}."
+                           if possible_renames else "")
+            suspects.append({
+                "urn": node.urn,
+                "why": (f"{null_key}={current_null:.2f}" +
+                        (f" versus {prior_null_key}={prior_null:.2f}" if prior_null is not None else "") +
+                        f" shows an abrupt null surge in this mapping.{rename_note}"),
+                "check_next": "Review the upstream-to-downstream column mapping and add a not-null assertion before retrying.",
+                "owner": ", ".join(node.owners) or node.custom_properties.get("owner"),
+                "confidence": "high",
+                "_score": 90 + current_null,
+            })
+
+        added_key = next((k for k in props if "rows_added" in k), None)
+        freshness_key = next((k for k in props if "latest" in k and ("date" in k or "fresh" in k)), None)
+        cadence_key = next((k for k in props if "cadence" in k or "frequency" in k), None)
+        added = _number(props.get(added_key)) if added_key else None
+        stale_days = None
+        if freshness_key:
+            try:
+                stale_days = (date.today() - date.fromisoformat(str(props[freshness_key])[:10])).days
+            except ValueError:
+                pass
+        daily = cadence_key and "daily" in str(props[cadence_key]).lower()
+        if added == 0 and (daily or stale_days is not None):
+            detail = f"{added_key}=0"
+            if freshness_key and stale_days is not None:
+                detail += f"; {freshness_key}={props[freshness_key]} ({stale_days} days old)"
+            if cadence_key:
+                detail += f"; {cadence_key}={props[cadence_key]}"
+            suspects.append({
+                "urn": node.urn,
+                "why": f"{detail}, so the feed has an observable freshness/throughput anomaly.",
+                "check_next": "Inspect the source extract and run history, then restore freshness before downstream recomputation.",
+                "owner": ", ".join(node.owners) or node.custom_properties.get("owner"),
+                "confidence": "high" if stale_days is not None and stale_days >= 2 else "medium",
+                "_score": 80 + min(stale_days or 0, 30),
+            })
+
+    ranked = sorted(suspects, key=lambda item: item.pop("_score"), reverse=True)[:3]
+    if ranked:
+        return {
+            "summary": "Evidence-only mode found deterministic anomaly signals in live DataHub metadata. "
+                       "This ranking is rule-based, not model-generated.",
+            "suspects": ranked,
+            "missing_evidence": "Use model-backed mode for broader, evidence-constrained reasoning over ambiguous incidents.",
+            "reasoning_mode": "evidence_only_deterministic",
+        }
+    return {
+        "summary": "Evidence-only mode found no deterministic volume, null-rate, or freshness anomaly in the returned DataHub metadata.",
+        "suspects": [],
+        "missing_evidence": "Add operational metadata (baseline volumes, freshness timestamps, or quality assertions), or use model-backed mode for broader evidence-constrained reasoning.",
+        "reasoning_mode": "evidence_only_deterministic",
+    }
+
+
 def investigate(symptom: str, affected_urn: str, *, server: str, token: str | None = None,
-                max_hops: int = 3, model: str = "claude-sonnet-5", act: bool = False) -> dict:
+                max_hops: int = 3, model: str = "claude-sonnet-5", act: bool = False,
+                on_progress=None, reasoning_mode: str = "auto") -> dict:
     """Run the full autonomous investigation. Returns the parsed root-cause report.
     If act=True, the agent quarantines the top high/medium-confidence suspect in DataHub.
     All DataHub access — reads and the write-back — flows through the DataHub MCP Server."""
-    with MCPDataHub(gms_url=server, token=token) as client:
-        evidence = gather_upstream(client, affected_urn, max_hops=max_hops)
+    def progress(phase: str, detail: str) -> None:
+        """Report only real checkpoints to an optional UI/CLI observer."""
+        if on_progress:
+            on_progress(phase, detail)
 
-        from anthropic import Anthropic
-        llm = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-        user = (f"SYMPTOM: {symptom}\n\nAFFECTED ENTITY: {affected_urn}\n\n"
-                f"UPSTREAM EVIDENCE FROM DATAHUB ({len(evidence)} nodes):\n{_evidence_block(evidence)}")
-        resp = llm.messages.create(
-            model=model, max_tokens=1500, system=SYSTEM,
-            messages=[{"role": "user", "content": user}],
-        )
-        # response may contain thinking + text blocks; take the text block(s) only
-        text = "".join(getattr(b, "text", "") for b in resp.content
-                       if getattr(b, "type", None) == "text").strip()
-        if text.startswith("```"):
-            text = text.split("```")[1].removeprefix("json").strip()
-        try:
-            report = json.loads(text)
-        except json.JSONDecodeError:
-            report = {"summary": text, "suspects": [], "missing_evidence": "LLM did not return valid JSON"}
+    progress("connecting", "Opening the official DataHub MCP connection...")
+    with MCPDataHub(gms_url=server, token=token) as client:
+        progress("evidence", f"Reading the affected asset and up to {max_hops} upstream lineage hops...")
+        evidence = gather_upstream(client, affected_urn, max_hops=max_hops)
+        progress("reasoning", f"DataHub returned {len(evidence)} evidence nodes. Grounding the diagnosis in those facts...")
+
+        requested_mode = reasoning_mode.lower()
+        if requested_mode not in {"auto", "model", "evidence"}:
+            raise ValueError("reasoning_mode must be auto, model, or evidence")
+        use_model = requested_mode == "model" or (requested_mode == "auto" and bool(os.environ.get("ANTHROPIC_API_KEY")))
+        llm = None
+        if use_model:
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                raise RuntimeError("Model-backed mode requires ANTHROPIC_API_KEY.")
+            from anthropic import Anthropic
+            llm = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+            user = (f"SYMPTOM: {symptom}\n\nAFFECTED ENTITY: {affected_urn}\n\n"
+                    f"UPSTREAM EVIDENCE FROM DATAHUB ({len(evidence)} nodes):\n{_evidence_block(evidence)}")
+            report = _reason_over_evidence(llm, model=model, user=user)
+            report["reasoning_mode"] = "model_backed"
+        else:
+            progress("reasoning", "No model key is present; applying deterministic checks to the live DataHub evidence...")
+            report = _evidence_only_report(evidence)
         report["_evidence_nodes"] = len(evidence)
 
-        # close the loop: act on the finding by quarantining the top confident suspect in DataHub
-        if act and report.get("suspects"):
+        # Containment is the existing autonomous action: act on a confident finding in DataHub.
+        if act and report.get("suspects") and use_model:
             top = report["suspects"][0]
             if str(top.get("confidence", "")).lower() in {"high", "medium"} and top.get("urn"):
                 from act import quarantine_node, map_and_contain_blast_radius
+                progress("containment", "Writing the confirmed incident tags through MCP, then reading them back...")
                 report["action"] = quarantine_node(client, top["urn"], note=top.get("why"))
                 report["blast_radius"] = map_and_contain_blast_radius(client, top["urn"])
+
+        # A repair is never an automatic continuation of containment. For the supported
+        # schema-mapping class we may generate a reviewable diff, but a human must explicitly
+        # approve the later sandbox trial in the UI. No production apply path exists.
+        if report.get("suspects") and use_model:
+            try:
+                from repair import propose_repair
+                progress("repair", "Checking whether the evidence supports a reviewable sandbox-only repair proposal...")
+                proposal = propose_repair(llm, report, evidence, model=model)
+                if proposal:
+                    report["repair"] = proposal
+            except Exception as e:  # additive only; diagnosis/containment remain available
+                report["repair"] = {"state": "proposal_failed", "attempted": False,
+                                    "verified": False, "error": f"{type(e).__name__}: {e}"}
+        elif act and not use_model:
+            report["action"] = {"applied": False, "blocked": True,
+                                "reason": "Evidence-only mode is read-only; model-backed mode is required before catalog containment."}
 
         # visualization only (fail-open): recover the lineage graph the agent walked, root cause lit up
         try:
             from graph_viz import lineage_dot
+            progress("visualizing", "Rendering the lineage path that the agent actually walked...")
             report["lineage_dot"] = lineage_dot(client, affected_urn, report, max_hops=max_hops)
         except Exception:
             report["lineage_dot"] = None
+    progress("complete", "Investigation complete. The report below separates evidence, action, and any unverified boundary.")
     return report
 
 
@@ -129,6 +328,28 @@ def render_report(report: dict, symptom: str, affected_urn: str) -> str:
             L.append("  dashboards affected: " + ", ".join(br["dashboards"]))
         if br.get("assets"):
             L.append("  data assets affected: " + ", ".join(br["assets"]))
+    rep = report.get("repair")
+    if rep and rep.get("state") == "approval_required":
+        L.append("")
+        L.append("REPAIR PROPOSAL — human approval required before a sandbox-only trial")
+        L.append(f"  target: {rep.get('target', '?')}")
+        L.append(f"  rationale: {rep.get('rationale', '').strip()}")
+        if rep.get("diff"):
+            L.append("  patch (review only; not applied):")
+            for dl in rep["diff"].splitlines():
+                L.append("    " + dl)
+        L.append("  boundary: " + rep.get("representativeness", ""))
+    elif rep and rep.get("attempted") and rep.get("applicable") is not False and not rep.get("error"):
+        L.append("")
+        status = "[OK] VERIFIED" if rep.get("verified") else "[!!] NOT VERIFIED"
+        L.append(f"APPROVED SANDBOX TRIAL — verified in an isolated sandbox  {status}")
+        L.append(f"  before: {rep.get('before','?')}")
+        L.append(f"  after : {rep.get('after','?')}")
+        if rep.get("diff"):
+            L.append("  patch (unified diff, for human review — NOT auto-applied to prod):")
+            for dl in rep["diff"].splitlines():
+                L.append("    " + dl)
+        L.append("  honesty: " + rep.get("representativeness", ""))
     if report.get("missing_evidence"):
         L.append("")
         L.append("TO CONFIRM")

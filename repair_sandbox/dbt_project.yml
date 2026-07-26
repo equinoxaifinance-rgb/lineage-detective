@@ -1,0 +1,11 @@
+name: repair_sandbox
+version: '1.0'
+config-version: 2
+profile: repair_sandbox
+model-paths: ["models"]
+seed-paths: ["seeds"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+models:
+  repair_sandbox:
+    +materialized: table

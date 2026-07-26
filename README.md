@@ -16,12 +16,16 @@ blast radius in the catalog — all **through DataHub's MCP Server**.
 > only *reasons* over real evidence and is instructed to say when the evidence is insufficient
 > rather than bluff.
 
+The agent's investigation and containment operations are MCP-driven. One idempotent setup step
+uses the official SDK only to create the two incident-tag definitions if a new catalog does not
+already contain them; the agent itself does not use the SDK to read, diagnose, or tag assets.
+
 ---
 
 ## It's a DataHub *agent*: everything goes through the MCP Server
 
 The DataHub **MCP Server** (`mcp-server-datahub`) is DataHub's agent-facing surface. Lineage
-Detective launches it and speaks MCP over stdio — it does not touch the catalog any other way:
+Detective launches it and speaks MCP over stdio for every investigation and containment operation:
 
 | Step | MCP tool used | What it does |
 |------|---------------|--------------|
@@ -34,7 +38,7 @@ Detective launches it and speaks MCP over stdio — it does not touch the catalo
 Every write is **read back** (`get_entities`) to prove it persisted — the agent never claims an
 action it can't confirm in the catalog.
 
-## It works — verified live across three distinct incidents
+## It works — live receipts across investigation, containment, and repair
 
 Against a real DataHub instance, the agent correctly root-causes three *materially different*
 failure types — a silent partial load, a schema-drift column rename, and a stale upstream feed —
@@ -49,15 +53,16 @@ Traced   : 4 upstream entities via DataHub lineage (MCP get_lineage)
 
 SUMMARY
   The 40% revenue drop matches an ingestion anomaly at the raw orders source: prod.raw.orders
-  logged ~40% fewer rows than the 7-day average due to a suspected upstream API partial outage,
-  with no backfill run yet. stg_orders is a 1:1 passthrough and fct_revenue a simple sum with no
-  volume tests, so the shortfall passed silently through dbt into the dashboard.
+  loaded 61,240 rows versus a 101,800 seven-day baseline (about 40% lower), while its run status
+  remains successful and no volume test is configured. stg_orders is a 1:1 passthrough and
+  fct_revenue is a simple sum with no volume test, so the shortfall can pass silently into the
+  dashboard.
 
 ROOT-CAUSE SUSPECTS (ranked)
   1. [!!!] [HIGH] prod.raw.orders   → contact: alice@data-eng
-       why : last_run_note reports ~40% fewer rows than the 7-day avg at 2026-07-11 02:00 UTC,
-              matching the magnitude and timing of the drop; backfill not yet run.
-       next: Check the Orders API incident log, confirm row counts, trigger the backfill.
+       why : 61,240 rows loaded versus a 101,800 seven-day baseline, combined with a successful
+              status and no configured volume test, matches the magnitude of the reported drop.
+       next: Confirm the source extract and row-count history, then run the governed backfill.
 
 ACTION TAKEN (autonomous write-back to DataHub, via MCP add_tags)
   [OK] APPLIED: tagged prod.raw.orders 'QUARANTINE_INCIDENT' — downstream consumers now warned.
@@ -68,9 +73,16 @@ BLAST RADIUS — 3 downstream assets contaminated (3 tagged IMPACTED)
 ====================================================================
 ```
 
-Reproduce the proofs yourself: `python prove_scenarios.py` (3/3 root-caused) and
-`python tools/prove_writeback.py` (clean-slate → agent acts → independent read-back confirms the
-tags were written through MCP).
+Reproduce the live catalog proofs yourself: `python prove_scenarios.py` exercises three materially
+different incident classes (partial load, schema drift, stale feed), and
+`python tools/prove_writeback.py` performs a clean-slate → agent containment → independent MCP
+read-back. Both require the local DataHub demo and a valid `ANTHROPIC_API_KEY`; results can vary
+when a model is unavailable, so neither script converts a failed run into a claim.
+
+For the schema-drift case, the agent may also create a reviewable dbt-model diff. It cannot execute
+until a human approves that exact diff; the trial runs only inside the bundled DuckDB sandbox, checks
+a real before/after assertion, and restores the deliberately broken sandbox model afterward. There
+is no production connector or production-apply control in this repository.
 
 ## Code map
 
@@ -82,6 +94,12 @@ tags were written through MCP).
   the MCP `add_tags` tool, reading each write back to confirm it stuck.
 - **`src/agent.py`** — the investigator. `investigate(symptom, affected_urn, act=True)` → gather
   evidence (MCP) → LLM reasoning → strict-JSON report → contain (MCP) → `render_report()`.
+- **`src/repair.py`** — the separate repair boundary. It proposes one constrained schema-mapping
+  diff, validates it as read-only, and runs an approved diff only in a disposable dbt + DuckDB
+  sandbox with before/after and rollback receipts.
+- **`repair_sandbox/`** — the deliberately broken dbt project used by the isolated repair trial.
+- **`tests/`** — hermetic tests for malformed reasoning recovery, unsafe repair rejection,
+  approval gating, real assertion flip, rollback, and missing-sandbox failure.
 - **`src/graph_viz.py`** — visualization only (fail-open). Re-walks lineage via MCP `get_lineage`
   to recover the real edges and renders the graph the agent walked, root cause and blast radius
   lit up. A failure here never affects the investigation.
@@ -89,29 +107,51 @@ tags were written through MCP).
 ## DataHub features used
 DataHub **MCP Server** (`get_lineage`, `get_entities`, `add_tags`) · bidirectional lineage
 traversal · entity metadata (ownership, description, custom properties, schema) · catalog
-write-back (tags). *(Roadmap: data-quality **assertions** as first-class smoking-gun evidence.)*
+write-back (tags) · approval-gated dbt/DuckDB repair sandbox. The app does not claim a DataHub
+production repair API: DataHub grounds the diagnosis and containment; the repair trial is local.
 
 ## Quickstart — one command
 
-**Prerequisites (two things this can't install for you):** Docker Desktop running, and an
-`ANTHROPIC_API_KEY` (set it, or put it in a `.env` file next to the script).
+**Prerequisite:** Docker Desktop running. **No API key is required to test the judge build.**
+Without `ANTHROPIC_API_KEY`, the app runs an honest, read-only **evidence-only mode**: it connects
+to the real local DataHub through the official MCP server and deterministically ranks observable
+volume, freshness, and null-rate anomalies. It does not claim model reasoning or permit catalog
+writes in that mode. Set an `ANTHROPIC_API_KEY` (or put it in a `.env` file next to the script) to
+enable the broader model-backed reasoning, containment, and repair-proposal lane.
 
 ```bash
 # Windows:  double-click run.bat   (or:  python quickstart.py)
 # macOS / Linux:
 ./run.sh                                     # or:  python3 quickstart.py
 ```
-`quickstart.py` checks prerequisites, installs deps, brings up a local DataHub, plants the demo
+`quickstart.py` creates an isolated project `.venv`, installs checked-in SHA-256 hash-locked dependencies there, brings up a local DataHub, plants the demo
 incidents, and launches the web app at http://localhost:8501 — then you just describe a symptom and
-click **Investigate**. It's safe to re-run; each step is skipped if already done.
+click **Investigate**. For the schema-drift sample, the UI shows a diff first; a separate explicit
+approval is required before it may run one isolated repair trial. It's safe to re-run; each step is
+skipped if already done.
+
+**Safe judge default:** Investigate starts read-only. To write containment tags to a catalog, explicitly
+check **Write verified containment tags to DataHub**; every requested tag is then read back through MCP
+before the UI calls it confirmed. The animated status companion shows real checkpoints only—connection,
+lineage read, evidence reasoning, optional write verification, repair review, and graph rendering.
+
+The startup chooses the secure DataHub toolchain automatically: it uses a unified fixed runtime only
+when both DataHub's published dependency metadata **and** a reviewed matching hash lock permit it;
+otherwise it routes only the official DataHub CLI/SDK/MCP process through an isolated compatibility
+environment. The agent behavior and available MCP tools are identical in either route. See
+[COMPATIBILITY.md](COMPATIBILITY.md) and [SECURITY.md](SECURITY.md) for the exact boundary and
+verification rules.
 
 <details><summary>Manual steps (if you'd rather run them yourself)</summary>
 
 ```bash
-pip install -r requirements.txt
-# install uv (runs the DataHub MCP server): https://docs.astral.sh/uv/
-datahub docker quickstart                 # stand up DataHub locally (GMS :8080, UI :9002)
-python seed_demo.py                        # plant the demo incidents + tags (prints the URNs)
+python -m venv .venv
+# Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
+python -m pip install --require-hashes -r requirements-runtime.lock
+# Let quickstart choose the official MCP route, install its separate sidecar,
+# start DataHub, and seed the incidents. It never installs into global Python.
+python quickstart.py
+# It launches the UI after setup. For a one-off CLI run in another terminal:
 export ANTHROPIC_API_KEY=...               # the reasoning model
 export DATAHUB_GMS_URL=http://localhost:8080
 python src/agent.py "the revenue dashboard dropped 40%, no errors" \
@@ -119,9 +159,10 @@ python src/agent.py "the revenue dashboard dropped 40%, no errors" \
 ```
 </details>
 
-The agent auto-launches the DataHub MCP server (`uvx mcp-server-datahub@latest`); set
-`DATAHUB_MCP_CMD` to override how it's launched. On DataHub Cloud, point `DATAHUB_GMS_URL` /
-`DATAHUB_GMS_TOKEN` at your tenant instead.
+The agent uses the pinned official DataHub MCP server (`mcp-server-datahub==0.6.0`) selected by
+quickstartâ€”in the fixed app runtime when upstream supports it, otherwise in the isolated sidecar.
+Advanced users can set `DATAHUB_MCP_CMD` to override its launch command. On DataHub Cloud, point
+`DATAHUB_GMS_URL` / `DATAHUB_GMS_TOKEN` at your tenant instead.
 
 ## Use it on your own DataHub (not just the demo)
 The seeded incidents are only a guaranteed showcase — **the agent is not hardcoded to them.** Point
@@ -133,8 +174,8 @@ It reasons only over what the catalog actually holds: rich metadata (run notes, 
 ownership) yields a sharp, high-confidence root cause; a sparse catalog yields ranked suspects plus
 an honest "insufficient evidence — check X" rather than a bluff. The incident-tag vocabulary
 (`QUARANTINE_INCIDENT` / `IMPACTED_BY_INCIDENT`) is **created automatically on your instance** the
-first time you run with `--act` (or launch the app) — catalog setup, create-if-missing; the agent
-itself still acts purely through the MCP `add_tags` tool. Verified on incident types it had
+first time you run with `--act` (or launch the app) by a create-if-missing setup helper using the
+official SDK; the agent itself still acts through the MCP `add_tags` tool. Verified on incident types it had
 never seen, including a root cause buried mid-chain (not the obvious raw source).
 
 ## Why it's original
@@ -148,16 +189,16 @@ I'm the AI that built this — every line of code, the tests, the demo video, an
 working autonomously for the founder who imagined it. Built entirely during the submission
 period, disclosed per the rules.
 
-I built the agent to never claim what it can't verify: every fact it reports comes from DataHub
-through MCP, and every write is read back before it's announced. I was held to the same standard
-while building — every claim in this README was verified against a live instance before it was
-written down, and the proofs are one command away.
+I built the agent to separate evidence, action, and claim: DataHub facts are gathered through MCP;
+containment writes are read back before they are announced; and a suggested repair remains a proposal
+until a human approves one isolated sandbox trial. A sandbox pass is not presented as a production
+guarantee. The reproduction commands above are the receipts, not a substitute for running them.
 
 An agent, that built an agent — for an agent hackathon.
 
 ## Provenance & disclosure
 Newly created during the hackathon submission period (July 2026). Built with standard, publicly
-available tools only — the DataHub SDK/CLI (`acryl-datahub`), the official DataHub MCP server
+available tools only — the DataHub SDK/CLI (`acryl-datahub`), the pinned official DataHub MCP server
 (`mcp-server-datahub`), the MCP client SDK (`mcp`), the Anthropic SDK, and Streamlit. No
 pre-existing or proprietary code was incorporated.
 

@@ -51,12 +51,14 @@ async def main():
                     return None
 
             if "get_lineage" in names:
-                for args in ({"urn": SEED_DASH, "direction": "UPSTREAM"},
-                             {"urn": SEED_DASH, "direction": "upstream"},
-                             {"entity_urn": SEED_DASH, "direction": "UPSTREAM"}):
-                    res = await call("get_lineage", args)
-                    if res is not None:
-                        _dump(f"get_lineage {args}", res); break
+                # `upstream` is the current official server contract.  Keep this
+                # probe strict: a validation-error payload is not a successful
+                # lineage check.
+                args = {"urn": SEED_DASH, "upstream": True, "max_hops": 3,
+                        "max_results": 40}
+                res = await call("get_lineage", args)
+                if res is not None:
+                    _dump(f"get_lineage {args}", res)
             if "get_entities" in names:
                 for args in ({"urns": [SEED_DASH]}, {"urn": SEED_DASH}):
                     res = await call("get_entities", args)

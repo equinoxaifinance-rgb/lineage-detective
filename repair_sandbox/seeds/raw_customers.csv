@@ -1,0 +1,9 @@
+customer_id,full_name,email,email_address,created_at
+1,Ada Lovelace,,ada@example.com,2025-01-05
+2,Alan Turing,,alan@example.com,2025-01-06
+3,Grace Hopper,,grace@example.com,2025-01-07
+4,Katherine Johnson,,katherine@example.com,2025-01-08
+5,Dorothy Vaughan,,dorothy@example.com,2025-01-09
+6,Margaret Hamilton,,margaret@example.com,2025-01-10
+7,Barbara Liskov,,barbara@example.com,2025-01-11
+8,Radia Perlman,,radia@example.com,2025-01-12

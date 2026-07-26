@@ -1,8 +1,18 @@
 .venv/
+.datahub-mcp-venv/
 __pycache__/
 *.pyc
 .env
+tmp-ui-smoke-*.log
 
 # video build artifacts
 cap/
 vid/
+
+# Regenerated dbt execution artifacts and local sandbox database. The reproducible source files
+# (dbt_project.yml, profiles.yml, seed, model) remain tracked.
+repair_sandbox/sandbox.duckdb
+repair_sandbox/logs/
+repair_sandbox/target/
+repair_sandbox/receipts/
+repair_sandbox/.user.yml

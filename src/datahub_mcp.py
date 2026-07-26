@@ -29,11 +29,20 @@ from mcp.client.stdio import stdio_client
 def _server_command() -> tuple[str, list[str]]:
     """Resolve how to launch the DataHub MCP server, most-specific first, so this runs on a
     judge's machine as well as ours:
-      1. DATAHUB_MCP_CMD env override (full command line),
-      2. an installed `mcp-server-datahub` console script on PATH,
-      3. `uvx mcp-server-datahub@latest` (the launcher DataHub documents),
-      4. `python -m uv tool run mcp-server-datahub@latest`.
+      1. DATAHUB_MCP_EXECUTABLE exact executable selected by quickstart,
+      2. DATAHUB_MCP_CMD env override (full command line),
+      3. an installed `mcp-server-datahub` console script on PATH,
+      4. the pinned `mcp-server-datahub` script installed in this project's .venv,
+      5. `uvx mcp-server-datahub==0.6.0` as a documented fallback.
     """
+    selected_exe = os.environ.get("DATAHUB_MCP_EXECUTABLE")
+    if selected_exe:
+        if not os.path.isfile(selected_exe):
+            raise FileNotFoundError(
+                "DATAHUB_MCP_EXECUTABLE was selected by setup but is no longer present: "
+                f"{selected_exe}. Re-run quickstart.py."
+            )
+        return selected_exe, []
     override = os.environ.get("DATAHUB_MCP_CMD")
     if override:
         parts = override.split()
@@ -41,20 +50,50 @@ def _server_command() -> tuple[str, list[str]]:
     exe = shutil.which("mcp-server-datahub")
     if exe:
         return exe, []
+    local_scripts = os.path.dirname(sys.executable)
+    local_exe = os.path.join(local_scripts, "mcp-server-datahub.exe" if os.name == "nt" else "mcp-server-datahub")
+    if os.path.exists(local_exe):
+        return local_exe, []
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sidecar_exe = os.path.join(
+        project_root, ".datahub-mcp-venv", "Scripts" if os.name == "nt" else "bin",
+        "mcp-server-datahub.exe" if os.name == "nt" else "mcp-server-datahub",
+    )
+    if os.path.exists(sidecar_exe):
+        return sidecar_exe, []
     uvx = shutil.which("uvx")
     if uvx:
-        return uvx, ["mcp-server-datahub@latest"]
-    return sys.executable, ["-m", "uv", "tool", "run", "mcp-server-datahub@latest"]
+        return uvx, ["mcp-server-datahub==0.6.0"]
+    return sys.executable, ["-m", "uv", "tool", "run", "mcp-server-datahub==0.6.0"]
+
+
+def _startup_timeout_from(error: BaseException) -> TimeoutError | None:
+    """Extract our useful startup timeout from anyio's teardown ExceptionGroup."""
+    if isinstance(error, TimeoutError) and str(error).startswith("DataHub MCP did not initialize"):
+        return error
+    if isinstance(error, BaseExceptionGroup):
+        for nested in error.exceptions:
+            timeout = _startup_timeout_from(nested)
+            if timeout:
+                return timeout
+    return None
 
 
 class MCPDataHub:
     """Synchronous facade over the DataHub MCP server (stdio). Use as a context manager."""
 
     def __init__(self, gms_url: str | None = None, token: str | None = None,
-                 enable_mutations: bool = True):
+                 enable_mutations: bool = True, startup_timeout: float = 45.0,
+                 tool_timeout: float = 30.0,
+                 server_command: tuple[str, list[str]] | None = None):
         self.gms_url = gms_url or os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
         self.token = token if token is not None else os.environ.get("DATAHUB_GMS_TOKEN", "")
         self.enable_mutations = enable_mutations
+        # Bound startup so a failed catalog connection cannot leave the UI at
+        # "Connecting" indefinitely. Individual tool calls retain their own timeout.
+        self.startup_timeout = max(float(startup_timeout), 0.1)
+        self.tool_timeout = max(float(tool_timeout), 0.1)
+        self._server_command_override = server_command
         self.tools: set[str] = set()
         # The MCP session lives entirely inside one task on a dedicated thread, so every anyio
         # cancel scope is entered AND exited in the same task (mixing tasks raises at teardown).
@@ -67,7 +106,14 @@ class MCPDataHub:
     def __enter__(self) -> "MCPDataHub":
         self._thread = threading.Thread(target=self._run, name="datahub-mcp", daemon=True)
         self._thread.start()
-        self._ready.wait()
+        if not self._ready.wait(self.startup_timeout + 2):
+            self._open_error = TimeoutError(
+                f"DataHub MCP did not initialize within {self.startup_timeout:.1f}s. "
+                "Check the catalog connection and retry."
+            )
+            self._reqq.put(None)
+            if self._thread:
+                self._thread.join(timeout=2)
         if self._open_error:
             raise self._open_error
         return self
@@ -87,7 +133,7 @@ class MCPDataHub:
 
     async def _serve(self) -> None:
         try:
-            cmd, args = _server_command()
+            cmd, args = self._server_command_override or _server_command()
             env = dict(os.environ)
             env["DATAHUB_GMS_URL"] = self.gms_url
             env["DATAHUB_GMS_TOKEN"] = self.token or ""
@@ -95,7 +141,13 @@ class MCPDataHub:
             params = StdioServerParameters(command=cmd, args=args, env=env)
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
-                    await session.initialize()
+                    try:
+                        await asyncio.wait_for(session.initialize(), timeout=self.startup_timeout)
+                    except asyncio.TimeoutError as exc:
+                        raise TimeoutError(
+                            f"DataHub MCP did not initialize within {self.startup_timeout:.1f}s. "
+                            "Check the catalog connection and retry."
+                        ) from exc
                     listed = await session.list_tools()
                     self.tools = {t.name for t in listed.tools}
                     self._ready.set()
@@ -106,20 +158,40 @@ class MCPDataHub:
                             break
                         tool, targs, fut = req
                         try:
-                            res = await session.call_tool(tool, targs)
+                            res = await asyncio.wait_for(
+                                session.call_tool(tool, targs), timeout=self.tool_timeout
+                            )
                             text = "".join(getattr(c, "text", "") for c in (res.content or []))
                             fut.set_result(text)
+                        except asyncio.TimeoutError as exc:
+                            fut.set_exception(TimeoutError(
+                                f"DataHub MCP tool '{tool}' did not respond within "
+                                f"{self.tool_timeout:.1f}s. Check the catalog connection and retry."
+                            ))
                         except BaseException as e:  # surface to the caller, keep serving
                             fut.set_exception(e)
         except BaseException as e:
-            self._open_error = e
+            # anyio may wrap a timed-out initialize in an ExceptionGroup while
+            # shutting down stdio. Preserve the actionable cause for the UI.
+            self._open_error = _startup_timeout_from(e) or e
             self._ready.set()
 
     # ---- raw tool call ---------------------------------------------------------
     def _call(self, tool: str, args: dict) -> str:
         fut: concurrent.futures.Future = concurrent.futures.Future()
         self._reqq.put((tool, args, fut))
-        return fut.result(timeout=180)
+        try:
+            return fut.result(timeout=self.tool_timeout + 5)
+        except TimeoutError:
+            # If the async side supplied a specific timeout, retain it. Otherwise
+            # the dispatch thread itself is unhealthy; give the UI the same clear
+            # retry boundary rather than a raw concurrent-futures exception.
+            if fut.done():
+                raise
+            raise TimeoutError(
+                f"DataHub MCP tool '{tool}' did not complete within the {self.tool_timeout:.1f}s "
+                "response budget. Check the catalog connection and retry."
+            )
 
     @staticmethod
     def _loads(text: str):

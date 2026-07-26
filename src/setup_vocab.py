@@ -1,27 +1,48 @@
-"""setup_vocab.py — catalog SETUP (not the agent): ensure the incident-tag vocabulary exists.
+"""Provision incident tags through the isolated DataHub sidecar.
 
-The official DataHub MCP `add_tags` tool validates that a tag entity EXISTS before attaching it
-(unlike the raw SDK, which auto-creates). On our demo instance `seed_demo.py` creates the two
-incident tags; on YOUR OWN DataHub they wouldn't exist yet — so the app ensures them at startup,
-idempotently (create-if-missing; harmless if present).
-
-This lives in the setup layer on purpose: the AGENT still drives DataHub entirely through the
-official MCP Server (`get_lineage` / `get_entities` / `add_tags`). Setting the table is not
-playing the meal.
+This is catalog setup, not agent behavior. The judge-facing app remains a clean
+MCP client; the official DataHub SDK performs the one create-if-missing setup
+inside `.datahub-mcp-venv` only.
 """
-from datahub.sdk import DataHubClient, Tag
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 INCIDENT_VOCABULARY = (
     ("QUARANTINE_INCIDENT", "Root cause of a data incident — quarantined by Lineage Detective."),
     ("IMPACTED_BY_INCIDENT", "Downstream asset contaminated by an upstream incident."),
 )
 
+ROOT = Path(__file__).resolve().parents[1]
+SIDECAR_SCRIPT = ROOT / "tools" / "setup_vocab_sidecar.py"
+
+
+def _sidecar_python() -> str:
+    override = os.environ.get("DATAHUB_BOOTSTRAP_PYTHON")
+    if override:
+        return override
+    return str(ROOT / ".datahub-mcp-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+
 
 def ensure_incident_vocabulary(server: str, token: str | None = None) -> list[str]:
-    """Idempotently create the incident tags on `server`. Returns the tag names ensured.
-    Raises on connection failure — callers decide whether that is fatal (the investigation
-    itself does not need the tags; only the act step does)."""
-    c = DataHubClient(server=server, token=token) if token else DataHubClient(server=server)
-    for name, desc in INCIDENT_VOCABULARY:
-        c.entities.upsert(Tag(name=name, description=desc))
+    """Create the two tag entities via the isolated official-SDK sidecar.
+
+    Raises a concrete setup error when quickstart has not provisioned the
+    sidecar, rather than silently falling back to an unpinned global install.
+    """
+    python = _sidecar_python()
+    if not os.path.exists(python):
+        raise RuntimeError("DataHub sidecar is missing; run `python quickstart.py` first.")
+    env = dict(os.environ)
+    env["DATAHUB_GMS_URL"] = server
+    if token:
+        env["DATAHUB_GMS_TOKEN"] = token
+    result = subprocess.run([python, str(SIDECAR_SCRIPT)], cwd=ROOT, env=env,
+                            capture_output=True, text=True, timeout=45)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "unknown sidecar error").strip()
+        raise RuntimeError(f"DataHub tag setup failed: {detail}")
     return [name for name, _ in INCIDENT_VOCABULARY]

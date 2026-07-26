@@ -66,7 +66,7 @@ gather evidence at every node.
 - CLI equivalent: `datahub lineage list --urn <affected> --direction upstream`.
 
 The incident clue almost always lives in a node's **custom properties / run notes** (e.g. a
-`last_run_note` saying the source API returned 40% fewer rows), not in an error — silent failures
+row-count history showing the source loaded far fewer rows than its own baseline), not in an error — silent failures
 are the hard ones.
 
 ### 2. Reason — rank root-cause suspects over ONLY that evidence
