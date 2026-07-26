@@ -83,3 +83,9 @@ Use-of-DataHub, less "spoon-fed"). Gemini: native Incidents API vs just tags.
 - 23:28 starting P1+P2 in parallel.
 - ~23:45 base VERIFIED 3/3 live + independent write-back. P5 audit found rigged-demo landmine.
 - ~00:55 honest-evidence rebuild DONE + re-verified 3/3 + re-audited (landmine resolved). Building repair loop.
+
+## 2026-07-26 connector validation note
+
+Connector evidence is now reported in three distinct states: contract tested, provider
+authenticated, and live action verified. One provider's live receipt never implies that every
+optional provider account was exercised.
