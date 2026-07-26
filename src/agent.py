@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from datetime import date
 from typing import Any
 
@@ -94,6 +96,59 @@ def _reason_over_evidence(llm, *, model: str, user: str) -> dict:
         "suspects": [],
         "missing_evidence": "Retry the investigation; no containment or repair was performed from an unparseable response.",
     }
+
+
+class _GatewayTextBlock:
+    type = "text"
+
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _GatewayResponse:
+    def __init__(self, text: str):
+        self.content = [_GatewayTextBlock(text)]
+
+
+class _GatewayMessages:
+    """Small Anthropic-compatible adapter that keeps the provider credential server-side."""
+    def __init__(self, endpoint: str, judge_code: str):
+        self.endpoint = endpoint.rstrip("/") + "/reason"
+        self.judge_code = judge_code
+
+    def create(self, *, model: str, max_tokens: int, system: str = "", messages: list[dict]) -> _GatewayResponse:
+        # Preserve the original evidence on the one allowed format-correction retry.  Sending
+        # only the final retry instruction would make the remote model reason without facts.
+        user = "\n\n".join(
+            str(item.get("content", "")) for item in messages if item.get("role") == "user"
+        )
+        body = json.dumps({"system": system, "user": user}).encode("utf-8")
+        request = urllib.request.Request(
+            self.endpoint, data=body, method="POST",
+            # Cloudflare's managed browser-integrity layer rejects Python urllib's
+            # anonymous default user agent before the Worker gets a chance to
+            # authenticate it. This is an honest client identity, not browser
+            # impersonation, and keeps the local judge route usable.
+            headers={"content-type": "application/json", "x-lineage-judge-code": self.judge_code,
+                     "user-agent": "Lineage-Detective-Judge/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:400]
+            raise RuntimeError(f"Judge gateway returned HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"Judge gateway is unavailable: {exc}") from exc
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("Judge gateway returned no reasoning text.")
+        return _GatewayResponse(text)
+
+
+class _GatewayClient:
+    def __init__(self, endpoint: str, judge_code: str):
+        self.messages = _GatewayMessages(endpoint, judge_code)
 
 
 def _evidence_block(nodes: list[NodeEvidence]) -> str:
@@ -214,7 +269,8 @@ def _evidence_only_report(nodes: list[NodeEvidence]) -> dict:
 
 def investigate(symptom: str, affected_urn: str, *, server: str, token: str | None = None,
                 max_hops: int = 3, model: str = "claude-sonnet-5", act: bool = False,
-                on_progress=None, reasoning_mode: str = "auto") -> dict:
+                on_progress=None, reasoning_mode: str = "auto", reasoning_endpoint: str | None = None,
+                judge_code: str | None = None) -> dict:
     """Run the full autonomous investigation. Returns the parsed root-cause report.
     If act=True, the agent quarantines the top high/medium-confidence suspect in DataHub.
     All DataHub access — reads and the write-back — flows through the DataHub MCP Server."""
@@ -232,17 +288,26 @@ def investigate(symptom: str, affected_urn: str, *, server: str, token: str | No
         requested_mode = reasoning_mode.lower()
         if requested_mode not in {"auto", "model", "evidence"}:
             raise ValueError("reasoning_mode must be auto, model, or evidence")
-        use_model = requested_mode == "model" or (requested_mode == "auto" and bool(os.environ.get("ANTHROPIC_API_KEY")))
+        provider_key = os.environ.get("ANTHROPIC_API_KEY")
+        reasoning_endpoint = reasoning_endpoint or os.environ.get("LINEAGE_REASONING_ENDPOINT")
+        judge_code = judge_code or os.environ.get("LINEAGE_JUDGE_CODE")
+        gateway_available = bool(reasoning_endpoint and judge_code)
+        use_model = requested_mode == "model" or (requested_mode == "auto" and bool(provider_key or gateway_available))
         llm = None
         if use_model:
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                raise RuntimeError("Model-backed mode requires ANTHROPIC_API_KEY.")
-            from anthropic import Anthropic
-            llm = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+            if provider_key:
+                from anthropic import Anthropic
+                llm = Anthropic(api_key=provider_key)
+                report_mode = "model_backed_local_secret"
+            elif gateway_available:
+                llm = _GatewayClient(str(reasoning_endpoint), str(judge_code))
+                report_mode = "model_backed_judge_gateway"
+            else:
+                raise RuntimeError("Model-backed mode requires a local provider key or configured judge gateway.")
             user = (f"SYMPTOM: {symptom}\n\nAFFECTED ENTITY: {affected_urn}\n\n"
                     f"UPSTREAM EVIDENCE FROM DATAHUB ({len(evidence)} nodes):\n{_evidence_block(evidence)}")
             report = _reason_over_evidence(llm, model=model, user=user)
-            report["reasoning_mode"] = "model_backed"
+            report["reasoning_mode"] = report_mode
         else:
             progress("reasoning", "No model key is present; applying deterministic checks to the live DataHub evidence...")
             report = _evidence_only_report(evidence)

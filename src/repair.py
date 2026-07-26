@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import io
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any, Callable
 
@@ -308,3 +310,30 @@ def execute_sandbox_trial(
 def receipt_for_display(receipt: dict) -> str:
     """Stable, human-readable receipt for the UI and a downloadable JSON artifact."""
     return json.dumps(receipt, indent=2, sort_keys=True, default=str)
+
+
+def build_handoff_packet(receipt: dict) -> bytes:
+    """Create a human-implementation packet after, and only after, a verified sandbox trial.
+
+    The packet is deliberately an offline handoff: it contains the exact reviewed diff and the
+    verification receipt, but it has no production credential, connector, or apply command.
+    """
+    if not receipt.get("verified"):
+        raise ValueError("A human handoff packet requires a verified sandbox receipt.")
+    diff = str(receipt.get("diff") or "")
+    sql = str(receipt.get("fixed_sql") or "")
+    readme = (
+        "# Lineage Detective — Human Implementation Handoff\n\n"
+        "This package was produced after a verified isolated sandbox trial. It is not a production deployment.\n\n"
+        "1. Review `proposed-change.diff` against the target repository.\n"
+        "2. Re-run the target environment's tests, permissions checks, and rollout process.\n"
+        "3. Apply only through your governed production change process.\n\n"
+        "The attached receipt records the exact sandbox trial and its representativeness boundary.\n"
+    )
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("README.md", readme)
+        archive.writestr("proposed-change.diff", diff)
+        archive.writestr("proposed-model.sql", sql)
+        archive.writestr("sandbox-verification-receipt.json", receipt_for_display(receipt))
+    return out.getvalue()

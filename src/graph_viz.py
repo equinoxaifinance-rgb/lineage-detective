@@ -54,8 +54,10 @@ def lineage_dot(client: MCPDataHub, affected_urn: str, report: dict,
     """Build a Graphviz DOT string of the investigated lineage, root cause + blast radius lit up."""
     try:
         up_nodes, up_edges = _walk_edges(client, affected_urn, upstream=True, max_hops=max_hops)
-        root = ((report.get("action") or {}).get("urn")
+        action = report.get("action") or {}
+        root = (action.get("urn")
                 or ((report.get("suspects") or [{}])[0] or {}).get("urn"))
+        containment_confirmed = bool(action.get("applied") and action.get("urn") == root)
         down_nodes, down_edges = (set(), set())
         if root:
             down_nodes, down_edges = _walk_edges(client, root, upstream=False, max_hops=6)
@@ -70,13 +72,17 @@ def lineage_dot(client: MCPDataHub, affected_urn: str, report: dict,
             plat = _platform(urn)
             label = f"{name}\\n({plat})" if plat else name
             if urn == root:
-                return (f'"{urn}" [label="{label}\\n🔒 QUARANTINE", style="filled,bold", '
-                        f'fillcolor="#7f1d1d", fontcolor="#fee2e2", color="#ef4444", penwidth=2];')
+                if containment_confirmed:
+                    return (f'"{urn}" [label="{label}\\n🔒 QUARANTINE", style="filled,bold", '
+                            f'fillcolor="#7f1d1d", fontcolor="#fee2e2", color="#ef4444", penwidth=2];')
+                return (f'"{urn}" [label="{label}\\nTOP SUSPECT", style="filled,bold", '
+                        f'fillcolor="#164e63", fontcolor="#cffafe", color="#22d3ee", penwidth=2];')
             if urn == affected_urn:
                 return (f'"{urn}" [label="{label}\\n⚠ symptom", style="filled", '
                         f'fillcolor="#1e3a8a", fontcolor="#dbeafe", color="#60a5fa", penwidth=2];')
             if urn in impacted:
-                return (f'"{urn}" [label="{label}\\nIMPACTED", style="filled", '
+                impact_label = "IMPACTED" if containment_confirmed else "DOWNSTREAM IMPACT"
+                return (f'"{urn}" [label="{label}\\n{impact_label}", style="filled", '
                         f'fillcolor="#78350f", fontcolor="#fef3c7", color="#f59e0b"];')
             return f'"{urn}" [label="{label}", style="filled", fillcolor="#1f2937", fontcolor="#e5e7eb", color="#374151"];'
 

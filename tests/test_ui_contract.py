@@ -32,10 +32,24 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn('html.escape(str(suspect.get(key) or ""), quote=True)', APP)
 
     def test_free_judge_path_is_explicitly_real_evidence_and_read_only(self):
-        self.assertIn("Free judge mode: real DataHub MCP evidence", APP)
+        self.assertIn("Evidence-only mode: real DataHub MCP evidence", APP)
         self.assertIn("disabled=not model_available", APP)
         self.assertIn('reasoning_mode="auto"', APP)
         self.assertIn("Evidence-only judge mode", APP)
+
+    def test_model_backed_judge_path_uses_a_code_but_never_embeds_a_provider_key(self):
+        self.assertIn('"Judge model gateway URL (optional)"', APP)
+        self.assertIn('"Judge access code (optional)"', APP)
+        self.assertIn("reasoning_endpoint=judge_endpoint or None, judge_code=judge_code or None", APP)
+        self.assertIn("provider key remains server-side", APP)
+
+    def test_containment_tags_appear_only_after_an_actual_confirmed_action(self):
+        self.assertIn('tags = "" if phase != "contained"', APP)
+        self.assertIn('confirmed_action = (st.session_state["report"].get("action") or {}).get("applied")', APP)
+
+    def test_repair_droid_effect_is_bound_to_the_actual_repair_phase(self):
+        self.assertIn('if phase == "repair" else ""', APP)
+        self.assertIn('"Drafting a reviewable repair"', APP)
 
 
 if __name__ == "__main__":

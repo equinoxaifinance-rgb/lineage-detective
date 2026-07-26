@@ -1,4 +1,4 @@
-# Release Verification — 2026-07-25
+# Release Verification — 2026-07-26
 
 This is an execution log, not a promise about future external services.
 
@@ -7,7 +7,7 @@ This is an execution log, not a promise about future external services.
 | Surface | Command / action | Observed result |
 |---|---|---|
 | Source syntax | `python -m compileall -q app.py src tests quickstart.py tools` | exit 0 |
-| Hermetic suite | `python -m unittest discover -s tests -v` | 27 passed, 0 failed |
+| Hermetic suite | `python -m unittest discover -s tests -v` | 35 passed, 0 failed |
 | Boundary shape | `python tools/verify_security_boundary.py` | pass; no packaging inputs; direct pins and both SHA-256 hash locks present |
 | Clean runtime install | disposable Python 3.11 virtual environment + `pip install --require-hashes -r requirements-runtime.lock` | installed from the lock, `pip check` passed, and `streamlit`, `anthropic`, `mcp`, and `duckdb` imported successfully |
 | Clean sidecar install | disposable Python 3.11 virtual environment + `pip install --require-hashes -r requirements-datahub-sidecar.lock` | installed from the lock, `pip check` passed, and `datahub` plus `mcp_server_datahub` imported successfully |
@@ -21,6 +21,10 @@ This is an execution log, not a promise about future external services.
 | Browser judge path | fresh Streamlit session, containment left unchecked | animated evidence stage advanced from MCP connection to completed report; 4 real entities traced; no containment write requested |
 | Free judge path | fresh Streamlit process with `ANTHROPIC_API_KEY` absent | containment control disabled; live MCP investigation ranked `prod.raw.orders` from its observed 40% volume delta and labeled the result evidence-only rather than model reasoning |
 | Free judge scenario path | three live local DataHub incidents, no model key | 3/3 deterministic diagnoses: `prod.raw.orders`, `analytics.staging.stg_customers`, and `prod.ref.exchange_rates`; no catalog action was requested or performed |
+| Judge gateway static deployment check | `node --check` + `wrangler deploy --dry-run` | Worker source parsed; Worker binding shape validated: encrypted secret boundary, Rate Limit binding, and Durable Object budget guard |
+| Judge gateway live boundary | `GET /health`, unauthorized request, authorized model request | health returned 200; missing code returned 401; authorized request returned provider-generated JSON without exposing the provider credential |
+| Full judge gateway investigation | local DataHub schema-drift incident, provider key absent from app process | 4 live evidence nodes; `model_backed_judge_gateway`; 3 suspects; repair proposal reached `approval_required` |
+| Full judge gateway containment | local DataHub schema-drift incident, containment enabled | incident vocabulary provisioned; quarantine applied to `analytics.staging.stg_customers`; 2 downstream assets tagged; fresh independent MCP entity read confirmed the quarantine tag |
 | Stalled-MCP recovery | deliberately nonresponsive MCP child process | startup produced the explicit retryable timeout in under 4 seconds rather than leaving the UI at Connecting; child cleanup was inspected afterward |
 | Post-startup MCP recovery | a real protocol-speaking test MCP initialized normally, then ignored a tool call | tool call produced the explicit retryable timeout in under 4 seconds rather than leaving the UI at Reading lineage |
 | Evidence-card safety | unit contract for catalog/model text rendered into HTML cards | asset label, owner, evidence, and next-check strings are HTML-escaped before interpolation |
@@ -51,8 +55,9 @@ See [SECURITY.md](SECURITY.md) and [COMPATIBILITY.md](COMPATIBILITY.md).
 - An approved trial uses an isolated dbt + DuckDB sandbox, restores the broken
   model afterward, and has no production connector or apply control.
 - The UI shows actual investigation checkpoints rather than a silent spinner.
-- Catalog containment is explicit opt-in; a fresh judge session starts read-only.
+- Evidence-only mode is read-only. With a configured local key or judge gateway, containment is enabled by default and can be unchecked for a read-only model-backed investigation.
 - No-key judge mode remains real: it reads the local DataHub through MCP and applies disclosed deterministic evidence checks. It is read-only and is not represented as a substitute for model-backed reasoning.
+- The judge gateway holds the provider credential only as an encrypted Worker secret. It accepts a separate access code, fixes the model/output ceiling, rejects oversized requests, rate-limits each IP/code, and has a strongly consistent whole-gateway daily request cap.
 - Both application and DataHub-sidecar dependency graphs are hash-locked; bootstrap uses `pip --require-hashes`.
 - Bootstrap has no separate unhashed pip-upgrade step. The future unified route refuses to install unless it has a reviewed matching hash lock.
 - A nonresponsive MCP server has a bounded startup timeout and a clear retryable error.

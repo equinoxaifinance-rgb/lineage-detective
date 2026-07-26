@@ -112,12 +112,14 @@ production repair API: DataHub grounds the diagnosis and containment; the repair
 
 ## Quickstart — one command
 
-**Prerequisite:** Docker Desktop running. **No API key is required to test the judge build.**
+**Prerequisite:** Docker Desktop running. **No personal provider API key is required to test the judge build.**
 Without `ANTHROPIC_API_KEY`, the app runs an honest, read-only **evidence-only mode**: it connects
 to the real local DataHub through the official MCP server and deterministically ranks observable
 volume, freshness, and null-rate anomalies. It does not claim model reasoning or permit catalog
-writes in that mode. Set an `ANTHROPIC_API_KEY` (or put it in a `.env` file next to the script) to
-enable the broader model-backed reasoning, containment, and repair-proposal lane.
+writes in that mode. For the complete judge path, enter the supplied **judge gateway URL** and
+**judge access code** in the sidebar. That route enables live model-backed reasoning,
+containment, and repair proposals without placing any provider key in the repository, browser,
+ZIP, or local environment. The access code is a bounded invitation credential, not an API key.
 
 ```bash
 # Windows:  double-click run.bat   (or:  python quickstart.py)
@@ -130,8 +132,9 @@ click **Investigate**. For the schema-drift sample, the UI shows a diff first; a
 approval is required before it may run one isolated repair trial. It's safe to re-run; each step is
 skipped if already done.
 
-**Safe judge default:** Investigate starts read-only. To write containment tags to a catalog, explicitly
-check **Write verified containment tags to DataHub**; every requested tag is then read back through MCP
+**Safe judge default:** Evidence-only mode starts read-only. With a local provider key or
+supplied judge gateway access, containment is enabled by default; uncheck it for a read-only
+model-backed investigation. Every requested tag is read back through MCP
 before the UI calls it confirmed. The animated status companion shows real checkpoints only—connection,
 lineage read, evidence reasoning, optional write verification, repair review, and graph rendering.
 

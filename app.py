@@ -14,9 +14,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import streamlit as st
 from agent import investigate  # noqa: E402
-from repair import execute_sandbox_trial, receipt_for_display  # noqa: E402
+from repair import build_handoff_packet, execute_sandbox_trial, receipt_for_display  # noqa: E402
 from setup_vocab import ensure_incident_vocabulary  # noqa: E402
 
+MASCOT = Path(__file__).with_name("assets") / "lineage-detective-mascot.png"
 
 @st.cache_resource(show_spinner=False)
 def _vocab_ready(server_url: str, token: str | None) -> str:
@@ -28,7 +29,7 @@ def _vocab_ready(server_url: str, token: str | None) -> str:
         return f"skipped ({type(exc).__name__})"
 
 
-st.set_page_config(page_title="Lineage Detective", page_icon="🕵️", layout="centered")
+st.set_page_config(page_title="Lineage Detective", page_icon=str(MASCOT), layout="centered")
 
 _CONF = {"high": ("#7f1d1d", "#fca5a5", "HIGH"),
          "medium": ("#78350f", "#fcd34d", "MEDIUM"),
@@ -47,9 +48,6 @@ EXAMPLES = {
         "urn:li:dataset:(urn:li:dataPlatform:looker,bi.finance_fx,PROD)"),
 }
 
-MASCOT = Path(__file__).with_name("assets") / "lineage-detective-mascot.png"
-
-
 @st.cache_data(show_spinner=False)
 def _mascot_data_uri() -> str | None:
     """Keep the judge UI resilient if an asset is absent from a local checkout."""
@@ -65,9 +63,10 @@ _STAGE_COPY = {
     "evidence": ("Walking the lineage", "Reading the affected asset and its live upstream dependencies."),
     "reasoning": ("Separating signal from guesswork", "The diagnosis is being constrained to the returned catalog evidence."),
     "containment": ("Verifying catalog tags", "Writing through MCP and reading back before any containment claim."),
-    "repair": ("Preparing a reversible proposal", "Any code change remains sandbox-only until a person approves it."),
+    "repair": ("Drafting a reviewable repair", "The droid is converting the evidence-bound diagnosis into a sandbox-only diff for human approval."),
     "visualizing": ("Mapping the evidence trail", "Rendering the actual lineage path used by the investigation."),
     "complete": ("Evidence report ready", "The result below separates facts, actions, and remaining uncertainty."),
+    "contained": ("Containment confirmed", "The droid dropped catalog tags through MCP and the app read them back."),
 }
 
 
@@ -77,39 +76,55 @@ def _detective_html(phase: str = "ready", detail: str | None = None) -> str:
     image = _mascot_data_uri()
     visual = (f'<img class="ld-mascot" alt="Lineage Detective" src="{image}">' if image
               else '<div class="ld-fallback">LD</div>')
-    tags = "" if phase != "containment" else (
-        '<span class="ld-tag ld-tag-one">QUARANTINE</span>'
-        '<span class="ld-tag ld-tag-two">IMPACT</span>'
+    tags = "" if phase != "contained" else (
+        '<span class="ld-tag ld-tag-one">QUARANTINE ✓</span>'
+        '<span class="ld-tag ld-tag-two">IMPACT ✓</span>'
     )
+    run_position = {"ready": "0%", "connecting": "12%", "evidence": "35%", "reasoning": "56%",
+                    "containment": "78%", "repair": "86%", "visualizing": "93%", "complete": "100%",
+                    "contained": "100%"}.get(phase, "0%")
+    repair_badge = ("<div class=\"ld-repair-badge\"><span>diff</span><b>→</b><span>sandbox</span></div>"
+                    if phase == "repair" else "")
     return f"""
 <style>
 @keyframes ld-float {{ 0%,100%{{transform:translateY(0) rotate(-1deg)}} 50%{{transform:translateY(-8px) rotate(1deg)}} }}
 @keyframes ld-scan {{ 0%{{transform:scale(.74);opacity:.75}} 100%{{transform:scale(1.25);opacity:0}} }}
 @keyframes ld-drop {{ 0%{{opacity:0;transform:translateY(-18px) scale(.7)}} 55%{{opacity:1}} 100%{{opacity:1;transform:translateY(0) scale(1)}} }}
-.ld-hero {{ position:relative; overflow:hidden; display:flex; align-items:center; gap:14px; min-height:120px;
+@keyframes ld-type {{ 0%,18%{{clip-path:inset(0 100% 0 0);opacity:.2}} 50%,100%{{clip-path:inset(0 0 0 0);opacity:1}} }}
+@keyframes ld-wave {{ 0%,100%{{transform:rotate(-2deg)}} 35%{{transform:rotate(5deg)}} 60%{{transform:rotate(-5deg)}} }}
+.ld-hero {{ position:relative; overflow:hidden; display:flex; align-items:center; gap:14px; min-height:154px;
   margin:4px 0 14px; padding:12px 16px; border:1px solid #1e3a5f; border-radius:16px;
   background:radial-gradient(circle at 12% 50%,#102a43 0,#08111f 45%,#050a13 100%); color:#e5eefb; }}
 .ld-hero:after {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.25;
   background:linear-gradient(115deg,transparent 30%,#22d3ee12 50%,transparent 70%); }}
-.ld-visual {{ position:relative; width:104px; min-width:104px; height:94px; z-index:1; display:grid; place-items:center; }}
-.ld-mascot {{ width:106px; height:106px; object-fit:contain; animation:ld-float 3.2s ease-in-out infinite; filter:drop-shadow(0 10px 12px #0009); }}
+.ld-visual {{ position:relative; width:144px; min-width:144px; height:134px; z-index:1; display:grid; place-items:center; }}
+.ld-mascot {{ width:148px; height:148px; object-fit:contain; animation:ld-float 3.2s ease-in-out infinite; filter:drop-shadow(0 10px 12px #0009); }}
 .ld-fallback {{ width:68px;height:68px;border-radius:50%;display:grid;place-items:center;background:#0f2847;border:2px solid #22d3ee;color:#fbbf24;font-weight:900; }}
 .ld-copy {{ position:relative; z-index:1; min-width:0; }}
 .ld-kicker {{ color:#67e8f9; font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.11em; text-transform:uppercase; }}
 .ld-title {{ margin:4px 0 3px; color:#f8fafc; font:800 19px/1.1 system-ui,sans-serif; }}
 .ld-detail {{ color:#b6c7df; font:400 13px/1.35 system-ui,sans-serif; }}
-.ld-scan {{ position:absolute; width:48px;height:48px;border:1px solid #22d3ee;border-radius:50%; animation:ld-scan 1.4s ease-out infinite; }}
+.ld-scan {{ position:absolute; width:64px;height:64px;border:1px solid #22d3ee;border-radius:50%; animation:ld-scan 1.4s ease-out infinite; }}
 .ld-tag {{ position:absolute; right:-4px; padding:3px 6px; border-radius:99px; background:#164e63; border:1px solid #22d3ee; color:#cffafe; font:800 9px/1 ui-monospace,monospace; animation:ld-drop .48s ease-out both; }}
 .ld-tag-one {{ top:17px; }} .ld-tag-two {{ top:43px; animation-delay:.16s; background:#3f2412; border-color:#fbbf24; color:#fef3c7; }}
-.ld-complete .ld-mascot {{ animation:none; }} .ld-complete .ld-scan {{ display:none; }}
+.ld-repair-badge {{ position:absolute; bottom:0; left:3px; right:3px; display:flex; gap:5px; justify-content:center; align-items:center; padding:4px 5px; border:1px solid #22d3ee; border-radius:7px; background:#061626e8; color:#cffafe; font:700 8px/1 ui-monospace,monospace; animation:ld-type 1.3s ease-out both; }}
+.ld-repair-badge b {{ color:#fbbf24; font-size:12px; }}
+.ld-complete .ld-mascot {{ animation:ld-wave .78s ease-in-out 1; }} .ld-complete .ld-scan {{ display:none; }}
+.ld-trail {{ position:relative; z-index:1; width:100%; height:32px; margin:7px 0 0; }}
+.ld-trail-line {{ position:absolute; left:3%; right:3%; top:16px; height:2px; background:linear-gradient(90deg,#22d3ee,#2563eb,#fbbf24); opacity:.75; }}
+.ld-trail-stop {{ position:absolute; top:4px; color:#b6c7df; font:700 9px/1 ui-monospace,monospace; text-transform:uppercase; }}
+.ld-stop-one {{ left:3%; }} .ld-stop-two {{ left:32%; }} .ld-stop-three {{ left:62%; }} .ld-stop-four {{ right:2%; }}
+.ld-runner {{ position:absolute; top:-10px; left:var(--ld-run); width:34px; height:34px; object-fit:contain; transition:left .7s cubic-bezier(.2,.8,.2,1); filter:drop-shadow(0 3px 5px #000a); }}
 div.stButton > button[kind="primary"] {{ background:linear-gradient(110deg,#0891b2,#2563eb) !important; border:1px solid #67e8f9 !important; color:#f8fafc !important; border-radius:10px !important; font-weight:750 !important; box-shadow:0 7px 18px #082f4966; }}
 div.stButton > button[kind="primary"]:hover {{ border-color:#fbbf24 !important; color:#fff !important; box-shadow:0 9px 22px #0e749080; }}
-@media (max-width:560px) {{ .ld-hero{{gap:8px;padding:10px}} .ld-visual{{width:78px;min-width:78px}} .ld-mascot{{width:86px;height:86px}} .ld-title{{font-size:16px}} }}
+@media (max-width:560px) {{ .ld-hero{{gap:8px;padding:10px}} .ld-visual{{width:94px;min-width:94px}} .ld-mascot{{width:100px;height:100px}} .ld-title{{font-size:16px}} .ld-trail-stop{{font-size:7px}} }}
 </style>
 <section class="ld-hero ld-{phase}" aria-label="Lineage Detective status">
-  <div class="ld-visual">{visual}<span class="ld-scan"></span>{tags}</div>
+  <div class="ld-visual">{visual}<span class="ld-scan"></span>{tags}{repair_badge}</div>
   <div class="ld-copy"><div class="ld-kicker">Lineage Detective · live evidence path</div>
-  <div class="ld-title">{title}</div><div class="ld-detail">{detail or default_detail}</div></div>
+  <div class="ld-title">{title}</div><div class="ld-detail">{detail or default_detail}</div>
+  <div class="ld-trail"><div class="ld-trail-line"></div><span class="ld-trail-stop ld-stop-one">symptom</span><span class="ld-trail-stop ld-stop-two">lineage</span><span class="ld-trail-stop ld-stop-three">evidence</span><span class="ld-trail-stop ld-stop-four">report</span>
+  <img class="ld-runner" style="--ld-run:{run_position}" alt="droid evidence progress" src="{image or ''}"></div></div>
 </section>
 """
 
@@ -121,6 +136,19 @@ def _render_detective(slot, phase: str = "ready", detail: str | None = None) -> 
 def _asset_label(urn: str) -> str:
     parts = urn.rsplit("(", 1)[-1].rstrip(")").split(",")
     return parts[-2] if len(parts) >= 2 else urn
+
+
+def _droid_action_html(title: str, detail: str, state: str = "working") -> str:
+    """A visible work-state companion for real repair and handoff transitions."""
+    image = _mascot_data_uri() or ""
+    return f"""
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;margin:8px 0;
+                border:1px solid #1e3a5f;border-radius:12px;background:#071321;color:#dbeafe">
+      <img src="{image}" alt="Lineage Detective droid" style="width:68px;height:68px;object-fit:contain;
+           {'animation:ld-float 2.2s ease-in-out infinite;' if state == 'working' else ''}">
+      <div><div style="font-weight:800;color:#67e8f9">{html.escape(title)}</div>
+      <div style="font-size:.9rem;color:#bfdbfe">{html.escape(detail)}</div></div>
+    </div>"""
 
 
 def _render_investigation(report: dict) -> None:
@@ -193,6 +221,10 @@ def _render_repair(report: dict) -> None:
         st.warning(f"Repair state: {repair.get('state', 'unknown')}")
         return
 
+    st.markdown(_droid_action_html(
+        "Droid drafted a constrained repair",
+        "It used the returned evidence to propose this exact diff. Nothing has been executed yet.",
+    ), unsafe_allow_html=True)
     st.info("A repair was proposed from the diagnosis and schemas. It has not run anywhere yet.")
     st.caption(repair.get("rationale") or "No additional rationale returned.")
     st.code(repair.get("diff", ""), language="diff")
@@ -232,6 +264,25 @@ def _render_repair(report: dict) -> None:
         metrics[2].metric("Rollback", "confirmed" if receipt.get("rollback_verified") else "not confirmed")
         if receipt.get("verified"):
             st.success("Sandbox trial verified: the assertion flipped from FAIL to PASS. The patch was not applied to production.")
+            st.markdown(_droid_action_html(
+                "Droid verified the sandbox repair",
+                "The exact diff passed the isolated assertion and is ready for a human implementation handoff.",
+                state="complete",
+            ), unsafe_allow_html=True)
+            handoff_approved = st.checkbox(
+                "I approve preparing this verified repair for a human production change process (not an automatic apply).",
+                key=f"handoff-{repair.get('repair_id', 'current')}",
+            )
+            if st.button("Prepare human implementation handoff", type="primary", disabled=not handoff_approved,
+                         width="stretch", key=f"handoff-button-{repair.get('repair_id', 'current')}"):
+                st.session_state["handoff_packet"] = build_handoff_packet(receipt)
+            handoff = st.session_state.get("handoff_packet")
+            if handoff:
+                st.download_button(
+                    "Download verified human handoff packet (.zip)", handoff,
+                    file_name="lineage-detective-human-handoff.zip", mime="application/zip",
+                    key=f"handoff-download-{repair.get('repair_id', 'current')}",
+                )
         else:
             st.error(receipt.get("error") or "Sandbox trial did not verify. No production claim is made.")
         st.download_button("Download JSON receipt", receipt_for_display(receipt),
@@ -240,7 +291,7 @@ def _render_repair(report: dict) -> None:
             st.code(receipt_for_display(receipt), language="json")
 
 
-st.title("🕵️ Lineage Detective")
+st.title("Lineage Detective")
 st.caption("Data-incident investigation, containment, and approval-gated sandbox repair through DataHub.")
 detective_status = st.empty()
 _render_detective(detective_status)
@@ -256,21 +307,36 @@ with st.sidebar:
     server = st.text_input("DataHub server", value=os.environ.get("DATAHUB_SERVER", "http://localhost:8080"))
     token = st.text_input("DataHub token (optional for local DataHub)", type="password")
     max_hops = st.slider("Max upstream hops", 1, 6, 3)
-    model_available = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if model_available:
-        st.success("Model-backed reasoning available for this process.")
+    local_model_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    judge_endpoint_default = os.environ.get("LINEAGE_REASONING_ENDPOINT", "")
+    judge_endpoint = st.text_input(
+        "Judge model gateway URL (optional)", value=judge_endpoint_default,
+        placeholder="https://lineage-detective-judge-gateway.<account>.workers.dev",
+        help="This is a server-side relay. It does not reveal or store the provider API key in this app.",
+    ).strip()
+    judge_code = st.text_input(
+        "Judge access code (optional)", type="password",
+        help="Provided with the judge instructions. It authorizes the bounded server-side model relay; it is not a provider API key.",
+    ).strip()
+    gateway_model = bool(judge_endpoint and judge_code)
+    model_available = local_model_key or gateway_model
+    if local_model_key:
+        st.success("Model-backed reasoning available with this process's private server key.")
+    elif gateway_model:
+        st.success("Model-backed judge gateway ready. The provider key remains server-side.")
     else:
-        st.info("Free judge mode: real DataHub MCP evidence + deterministic anomaly checks. No API key required; read-only by design.")
-    contain = st.checkbox("Write verified containment tags to DataHub", value=False,
+        st.info("Evidence-only mode: real DataHub MCP evidence + deterministic checks. Add the judge gateway URL and access code for full model-backed reasoning and repair.")
+    contain = st.checkbox("Contain the confirmed incident in DataHub", value=model_available,
                           disabled=not model_available,
-                          help="Optional model-backed action: writes quarantine/impact tags through MCP and reads them back to confirm. Evidence-only judge mode is intentionally read-only.")
+                          help="Model-backed default: writes quarantine/impact tags through MCP and reads them back to confirm. You may uncheck it for a read-only model-backed investigation. Evidence-only judge mode is always read-only.")
     st.caption("No token is stored by this app. A private cloud tenant may require one.")
 
 example = st.selectbox("Start from an example incident", list(EXAMPLES.keys()))
 symptom = st.text_area("What looks wrong?", value=EXAMPLES[example][0], height=90)
 affected = st.text_input("Affected asset URN", value=EXAMPLES[example][1])
 
-if st.button("Investigate", type="primary", width="stretch"):
+primary_label = "Investigate & contain" if model_available else "Investigate (evidence-only, read-only)"
+if st.button(primary_label, type="primary", width="stretch"):
     def _run_investigation() -> None:
         status = st.status("Preparing investigation...", expanded=True)
         bar = st.progress(3, text="Starting a live evidence path; no diagnosis has been made yet.")
@@ -300,10 +366,17 @@ if st.button("Investigate", type="primary", width="stretch"):
             st.session_state["report"] = investigate(
                 symptom, affected, server=server, token=token or None, max_hops=max_hops, act=contain,
                 on_progress=show_progress, reasoning_mode="auto",
+                reasoning_endpoint=judge_endpoint or None, judge_code=judge_code or None,
             )
             st.session_state.pop("repair_receipt", None)
-            status.update(label="Evidence report ready", state="complete", expanded=False)
-            _render_detective(detective_status, "complete")
+            st.session_state.pop("handoff_packet", None)
+            confirmed_action = (st.session_state["report"].get("action") or {}).get("applied")
+            if confirmed_action:
+                status.update(label="Containment confirmed", state="complete", expanded=False)
+                _render_detective(detective_status, "contained")
+            else:
+                status.update(label="Evidence report ready", state="complete", expanded=False)
+                _render_detective(detective_status, "complete")
         except Exception as exc:
             bar.progress(100, text="Investigation stopped before a report could be verified.")
             status.update(label="Investigation stopped", state="error", expanded=True)

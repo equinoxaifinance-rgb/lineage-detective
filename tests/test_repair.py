@@ -9,6 +9,8 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 
@@ -105,6 +107,23 @@ class RepairTests(unittest.TestCase):
             self.assertTrue(receipt["after"]["passed"], receipt)
             self.assertTrue(receipt["rollback_verified"], receipt)
             self.assertEqual((sandbox / "models" / "stg_customers.sql").read_text(encoding="utf-8"), repair.BROKEN_SQL)
+
+    def test_handoff_packet_requires_verified_receipt_and_preserves_exact_artifacts(self):
+        with self.assertRaises(ValueError):
+            repair.build_handoff_packet({"verified": False})
+        receipt = {
+            "verified": True,
+            "diff": "--- a/model.sql\n+++ b/model.sql\n+select 1\n",
+            "fixed_sql": "select 1 as repaired\n",
+            "receipt_sha256": "abc123",
+        }
+        with zipfile.ZipFile(BytesIO(repair.build_handoff_packet(receipt))) as archive:
+            self.assertEqual(set(archive.namelist()), {
+                "README.md", "proposed-change.diff", "proposed-model.sql",
+                "sandbox-verification-receipt.json",
+            })
+            self.assertIn("select 1", archive.read("proposed-change.diff").decode("utf-8"))
+            self.assertIn("abc123", archive.read("sandbox-verification-receipt.json").decode("utf-8"))
 
 
 if __name__ == "__main__":

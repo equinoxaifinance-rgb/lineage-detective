@@ -1,0 +1,126 @@
+/**
+ * Lineage Detective judge gateway.
+ *
+ * The browser never receives the provider key. This Worker holds it as an encrypted
+ * Cloudflare secret, rate-limits judge requests, fixes the model/token ceiling, and
+ * returns only the model response needed by the local DataHub judge build.
+ */
+
+const MAX_BODY_BYTES = 60_000;
+const MAX_SYSTEM_CHARS = 12_000;
+const MAX_USER_CHARS = 42_000;
+const MAX_OUTPUT_TOKENS = 1_500;
+const MODEL = "claude-sonnet-5";
+const DEFAULT_DAILY_REQUEST_CAP = 200;
+
+function cors() {
+  // A judge runs the app locally, so the origin is not known in advance. The access code,
+  // fixed model, payload limits, and Worker rate limiter protect the endpoint; no secret
+  // is in this response or in browser storage.
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "content-type, x-lineage-judge-code",
+    "access-control-max-age": "600",
+    "content-type": "application/json; charset=utf-8",
+  };
+}
+
+function reply(status, payload) {
+  return new Response(JSON.stringify(payload), { status, headers: cors() });
+}
+
+function validText(value, max) {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function validOptionalText(value, max) {
+  return value === undefined || (typeof value === "string" && value.length <= max);
+}
+
+/**
+ * A strongly consistent shared request ledger. Cloudflare's rate-limit binding
+ * throttles per IP at the edge; this Durable Object additionally enforces a
+ * whole-gateway daily ceiling so a leaked judge code cannot create unbounded
+ * provider spend. The browser cannot address this object directly.
+ */
+export class JudgeBudget {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    const cap = Math.max(1, Number(new URL(request.url).searchParams.get("cap")) || DEFAULT_DAILY_REQUEST_CAP);
+    const used = (await this.state.storage.get("used")) || 0;
+    if (used >= cap) {
+      return Response.json({ allowed: false, remaining: 0, retry_after: "next UTC day" });
+    }
+    const next = used + 1;
+    await this.state.storage.put("used", next);
+    return Response.json({ allowed: true, remaining: cap - next });
+  }
+}
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
+    if (url.pathname === "/health" && request.method === "GET") {
+      return reply(200, { status: "ok", service: "lineage-detective-judge-gateway" });
+    }
+    if (url.pathname !== "/reason" || request.method !== "POST") {
+      return reply(404, { error: "not_found" });
+    }
+    const suppliedCode = request.headers.get("x-lineage-judge-code") || "";
+    if (!env.JUDGE_CODE || suppliedCode !== env.JUDGE_CODE) {
+      return reply(401, { error: "judge_access_required" });
+    }
+    const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
+    const limited = await env.JUDGE_RATE.limit({ key: `${clientIp}:${suppliedCode}` });
+    if (!limited.success) {
+      return reply(429, { error: "judge_rate_limited", retryable: true });
+    }
+    const day = new Date().toISOString().slice(0, 10);
+    const dailyCap = Math.max(1, Number(env.JUDGE_DAILY_REQUEST_CAP) || DEFAULT_DAILY_REQUEST_CAP);
+    const budgetStub = env.JUDGE_BUDGET.getByName(`daily-${day}`);
+    const budget = await (await budgetStub.fetch(`https://judge-budget/consume?cap=${dailyCap}`)).json();
+    if (!budget.allowed) {
+      return reply(429, { error: "judge_daily_cap_reached", retryable: true, retry_after: budget.retry_after });
+    }
+    const length = Number(request.headers.get("content-length") || "0");
+    if (length > MAX_BODY_BYTES) return reply(413, { error: "request_too_large" });
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return reply(400, { error: "invalid_json" });
+    }
+    if (!validOptionalText(body?.system, MAX_SYSTEM_CHARS) || !validText(body?.user, MAX_USER_CHARS)) {
+      return reply(400, { error: "invalid_reasoning_request" });
+    }
+    if (!env.ANTHROPIC_API_KEY) {
+      return reply(503, { error: "reasoning_service_not_configured", retryable: false });
+    }
+    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        ...(typeof body.system === "string" && body.system ? { system: body.system } : {}),
+        messages: [{ role: "user", content: body.user }],
+      }),
+    });
+    if (!upstream.ok) {
+      return reply(502, { error: "reasoning_provider_unavailable", retryable: upstream.status >= 500 });
+    }
+    const answer = await upstream.json();
+    const text = (answer.content || []).filter((part) => part.type === "text").map((part) => part.text).join("").trim();
+    if (!text) return reply(502, { error: "empty_reasoning_response", retryable: true });
+    return reply(200, { text });
+  },
+};

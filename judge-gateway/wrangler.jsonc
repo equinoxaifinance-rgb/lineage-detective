@@ -1,0 +1,23 @@
+{
+  "name": "lineage-detective-judge-gateway",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-26",
+  "vars": {
+    "JUDGE_DAILY_REQUEST_CAP": "200"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "JUDGE_BUDGET", "class_name": "JudgeBudget" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["JudgeBudget"] }
+  ],
+  "ratelimits": [
+    {
+      "name": "JUDGE_RATE",
+      "namespace_id": "41026",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ]
+}
