@@ -9,6 +9,7 @@ diff, sandbox receipt, implementation proof, and downloadable handoff.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -144,19 +145,37 @@ def main() -> None:
                     approve.click()
                     _mark(timeline, started, "autonomous_approval_clicked")
 
-                    # Streamlit replaces the status node when the callback starts.
-                    # Reacquire it after the rerender instead of retaining the pre-click
-                    # DOM handle.
+                    # Progress remains where the approval happened. Reacquire the
+                    # action-local rail after Streamlit's rerender, but do not move the
+                    # camera to a second status surface.
                     time.sleep(0.8)
-                    status = page.locator('[aria-label="Lineage Detective status"]')
-                    try:
-                        status.first.wait_for(state="attached", timeout=10_000)
-                        status.first.scroll_into_view_if_needed()
-                        _mark(timeline, started, "show:live_workflow_status")
-                    except Exception:
-                        # The workflow itself remains authoritative. Missing this camera
-                        # move must not be mistaken for a failed product run.
-                        _mark(timeline, started, "live_status_camera_move_skipped")
+                    status = page.locator('[aria-label="Verified workflow progress"]')
+                    if status.count() != 1:
+                        raise RuntimeError(
+                            "The action-local workflow rail was missing or duplicated."
+                        )
+                    status.wait_for(state="visible", timeout=10_000)
+                    _mark(timeline, started, "show:live_workflow_status")
+                    progress_values: list[int] = []
+
+                    def sample_progress() -> None:
+                        text = status.inner_text()
+                        match = re.search(r"\b(\d{1,3})%", text)
+                        if not match:
+                            raise RuntimeError(
+                                "The visible workflow rail did not expose a percentage."
+                            )
+                        value = int(match.group(1))
+                        if progress_values and value < progress_values[-1]:
+                            raise RuntimeError(
+                                "Workflow progress moved backward: "
+                                f"{progress_values[-1]}% -> {value}%."
+                            )
+                        if not progress_values or value != progress_values[-1]:
+                            progress_values.append(value)
+                            _mark(timeline, started, f"progress:{value}")
+
+                    sample_progress()
 
                     complete = page.get_by_text(
                         (
@@ -177,6 +196,7 @@ def main() -> None:
                     returned_at: float | None = None
                     deadline = time.monotonic() + 150
                     while time.monotonic() < deadline:
+                        sample_progress()
                         if complete.count() and complete.first.is_visible():
                             break
                         if failure.count() and failure.first.is_visible():
@@ -217,6 +237,18 @@ def main() -> None:
                         )
                         raise PlaywrightTimeoutError(
                             "Timed out waiting for an autonomous success/failure receipt."
+                        )
+                    status.wait_for(state="visible", timeout=10_000)
+                    sample_progress()
+                    if progress_values[-1] != 100:
+                        raise RuntimeError(
+                            "The verified workflow completed without a visible 100% rail: "
+                            f"{progress_values}."
+                        )
+                    if len(progress_values) < 4:
+                        raise RuntimeError(
+                            "The visible workflow rail did not show enough real phase movement: "
+                            f"{progress_values}."
                         )
                     _mark(timeline, started, "autonomous_workflow_complete")
                     time.sleep(3)
@@ -270,7 +302,9 @@ def main() -> None:
     events = {item["event"] for item in timeline}
     required = {
         "autonomous_approval_clicked",
+        "show:live_workflow_status",
         "autonomous_workflow_complete",
+        "progress:100",
         "show:Exact diff",
         "show:3 · Sandbox verification receipt",
         "show:4 · Verified human handoff",

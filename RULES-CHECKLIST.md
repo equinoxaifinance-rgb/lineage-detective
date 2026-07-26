@@ -7,11 +7,11 @@ Checked: 2026-07-26. Recheck immediately before submission because the rules per
 |---|---|---|
 | Working application using DataHub plus an eligible agent surface | DataHub MCP drives search, lineage, entity reads, containment writes, and readback | Implemented and tested |
 | Easy-access project URL | `https://lineage-detective.equinoxaifinance.workers.dev` | Reverify after final deploy |
-| Public repository with all source, assets, and setup instructions | `https://github.com/equinoxaifinance-rgb/lineage-detective` | Synchronize and read back before video |
+| Public repository with all source, assets, and setup instructions | `https://github.com/equinoxaifinance-rgb/lineage-detective` | Synchronize and read back after owner video approval |
 | Apache 2.0 license visible in repository | [`LICENSE`](LICENSE) | Present; recheck GitHub About |
 | Text description of features, functionality, technologies, and data | [`README.md`](README.md) plus draft Devpost copy | Repository complete; Devpost pending |
-| Public YouTube/Vimeo/Youku video under three minutes | Final live-function video | Pending product lock |
-| Video shows the project functioning on its intended device | Planned live browser investigation → containment → repair → sandbox → handoff | Pending product lock |
+| Public YouTube/Vimeo/Youku video under three minutes | 148.100-second final live-function candidate, SHA-256 `b3d7a8595b232e0b08620ee31991cd832e3c333b644ff87f77274363cc666856` | Artifact verified; owner approval and publication pending |
+| Video shows the project functioning on its intended device | Uninterrupted browser approval → live lineage → containment → repair → sandbox → apply → handoff | Recorded and independently inspected |
 | No unlicensed trademarks, copyrighted music, or material | Use original UI/Trace art, generated narration, and licensed/original audio only | Enforce during media QA |
 | Recommended sample generated outputs | [`examples/generated`](examples/generated/) with exact SQL, diffs, receipts, and ZIPs | Present and hash-verified |
 | Free, unrestricted judge access through judging period | Public app plus bounded model gateway instructions; DataHub tenant connection or local quickstart | Reverify credentials, budgets, and expiry before submission |

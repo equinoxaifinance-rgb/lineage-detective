@@ -1,6 +1,8 @@
-"""make_video.py — compose the demo video from REAL captured UI frames + AI narration.
-Streams frames to the encoder (no giant in-memory list), muxes narration with the bundled ffmpeg.
-Output: vid/lineage_detective_demo.mp4
+"""LEGACY still-frame composer retained for historical reproduction only.
+
+It does not create the current judge artifact. The release path uses
+``tools/record_judge_demo.py`` followed by ``tools/build_judge_video.py`` so the submitted video
+shows one uninterrupted real browser workflow.
 """
 import os, subprocess
 from PIL import Image, ImageDraw, ImageFont

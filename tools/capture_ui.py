@@ -1,5 +1,8 @@
-"""capture_ui.py — drive the LIVE Streamlit app through all 3 real incidents with Playwright and
-screenshot each. Real UI, real investigations, real DataHub write-back. Frames for the video."""
+"""LEGACY screenshot collector retained for historical reproduction only.
+
+This is not the current judge-video path. The release candidate is recorded as one uninterrupted
+browser workflow by ``tools/record_judge_demo.py``.
+"""
 import os
 from playwright.sync_api import sync_playwright
 

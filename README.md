@@ -208,12 +208,13 @@ way to reproduce the bundled incidents against a real local DataHub deployment.
 
 **Safe judge default:** Evidence-only mode starts read-only. With a local provider key or
 supplied judge gateway access, containment is enabled by default; uncheck it for a read-only
-model-backed investigation. Every requested tag is read back through MCP
-before the UI calls it confirmed. During investigation, **Trace**, the stationary droid, performs a subtle
-evidence scan: its lens pulses, a beam sweeps, and evidence nodes illuminate while the adjacent
-text reports real callbacks from connection, lineage, reasoning, and readback. The sandbox uses
-its own real reset/seed/baseline/rewrite/verification/rollback milestones. These are activity
-indicators, not fabricated countdowns.
+model-backed investigation. Every requested tag is read back through MCP before the UI calls it
+confirmed. During the approved workflow, **Trace** moves along the single execution rail beside
+the action button. Its percentage and stage copy come from real connection, lineage, reasoning,
+containment, sandbox, apply, and handoff callbacks. The rail is not a timer and never advances on
+elapsed time. The sandbox contributes its real reset, seed, baseline, rewrite, verification, and
+rollback milestones to that same surface; reduced-motion mode keeps the evidence while removing
+nonessential motion.
 
 The startup chooses the secure DataHub toolchain automatically: it uses a unified fixed runtime only
 when both DataHub's published dependency metadata **and** a reviewed matching hash lock permit it;

@@ -15,8 +15,8 @@ This file separates implemented, tested, packaged, deployed, published, and subm
 - Optional GitHub, dbt Cloud, Airflow, Fivetran, Snowflake, DataHub assertion, and customer-command
   connectors with scoped credentials and secret-free receipts.
 - Hosted public-network policy and redirect rejection for credential-bearing requests.
-- 103/103 local tests and 103/103 tests from a clean Linux/amd64 image after the final redirect
-  regression was added.
+- 109/109 local tests in 48.024 seconds and 109/109 tests from the exact clean
+  Linux/amd64 release-candidate image in 28.779 seconds.
 - Three executed example cases with independently verified hashes and handoff ZIPs.
 - Local browser full run: four live lineage entities, containment plus two impact writes read back,
   0/8 to 8/8 sandbox assertion, rollback confirmed, session-isolated exact-byte apply, handoff and
@@ -24,9 +24,9 @@ This file separates implemented, tested, packaged, deployed, published, and subm
 
 ## Green: packaged release
 
-- Image proof pass: `lineage-detective:proof-current`
+- Image proof pass: `lineage-detective:release-candidate`
 - Proof-pass digest:
-  `sha256:436e8a565e1e683e228ef86bf4f850915819482c876f1cf34be3b37957af4127`
+  `sha256:f67902d39550812fecb455c2cd932db8d4c525bba4f405e3adc6dd57b0f5132f`
 - Clean health check: HTTP 200 `ok`
 - `pip check`: no broken requirements
 - App-runtime audit: no known vulnerabilities
@@ -45,16 +45,17 @@ the image that it hashes.
 
 ## Green: final judge video artifact
 
-- 145.467 seconds, 1920x1080, 30 fps, H.264 video plus 48 kHz AAC audio.
+- 148.100 seconds, 1920x1080, 30 fps, H.264 video plus AAC audio.
 - The browser recording contains one uninterrupted real approval-to-repair workflow; its event
-  timeline reached live lineage, diagnosis, exact diff, sandbox receipt, autonomous completion,
-  and verified handoff.
+  timeline recorded the single action-local rail advancing monotonically through
+  10, 22, 36, 47, 57, 60, 61, 70, 76, 88, 94, and 100 percent, then reached live lineage,
+  diagnosis, exact diff, sandbox receipt, autonomous completion, and verified handoff.
 - Both streams decoded end to end with zero decoder errors. Integrated loudness measured
-  -16.16 LUFS with -1.36 dB true peak.
+  -16.3 LUFS with -1.4 dB true peak.
 - An independent speech-to-text pass recovered the intended technical claims, including
-  zero rows passing before and all eight rows passing after.
+  zero rows passing before and all eight rows passing after, plus the human/AI authorship note.
 - SHA-256:
-  `d64a8d3df76196cc20d91782e77b1bdbba72a75f46f16b7ec900df57e03adc39`
+  `b3d7a8595b232e0b08620ee31991cd832e3c333b644ff87f77274363cc666856`
 
 ## Intentionally not started
 

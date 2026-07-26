@@ -169,6 +169,20 @@ def main() -> None:
             ),
         },
     ]
+    # The live timeline, not a minimum narration preference, owns every cut.
+    # Leave a small breath before the next visual state so two takes can never
+    # talk over one another after tempo correction.
+    for current, following in zip(segments, segments[1:]):
+        available = float(following["start"]) - float(current["start"]) - 0.18
+        if available <= 0:
+            raise SystemExit(
+                f"Invalid narration order: {current['name']} reaches {following['name']}."
+            )
+        current["max"] = min(float(current["max"]), available)
+    segments[-1]["max"] = min(
+        float(segments[-1]["max"]),
+        raw_duration - float(segments[-1]["start"]) - 0.18,
+    )
     SCRIPT_FILE.write_text(json.dumps(segments, indent=2), encoding="utf-8")
 
     # Regenerate every take. A prior clip belongs to a prior timing contract.
@@ -189,13 +203,17 @@ def main() -> None:
         response.write_to_file(clip)
         clip_duration = _duration(clip)
         inputs.append(clip)
+        tempo = max(1.0, clip_duration / segment["max"])
+        mixed_seconds = clip_duration / tempo
         measured.append(
             {
                 "name": segment["name"],
                 "start": round(segment["start"], 3),
                 "max": round(segment["max"], 3),
                 "generated_seconds": round(clip_duration, 3),
-                "tempo": round(max(1.0, clip_duration / segment["max"]), 5),
+                "tempo": round(tempo, 5),
+                "mixed_seconds": round(mixed_seconds, 3),
+                "ends_at": round(segment["start"] + mixed_seconds, 3),
             }
         )
     rushed = [item for item in measured if item["tempo"] > 1.35]
@@ -203,6 +221,18 @@ def main() -> None:
         raise SystemExit(
             "Narration would sound rushed; shorten or reschedule these takes: "
             + ", ".join(f"{item['name']} ({item['tempo']}x)" for item in rushed)
+        )
+    for current, following in zip(measured, measured[1:]):
+        if current["ends_at"] > following["start"] - 0.1:
+            raise SystemExit(
+                "Narration timing collision: "
+                f"{current['name']} ends at {current['ends_at']:.3f}s, "
+                f"too close to {following['name']} at {following['start']:.3f}s."
+            )
+    if measured[-1]["ends_at"] > raw_duration - 0.08:
+        raise SystemExit(
+            "Final narration overruns the captured video: "
+            f"{measured[-1]['ends_at']:.3f}s > {raw_duration:.3f}s."
         )
     (MEDIA / "narration-measurements.json").write_text(
         json.dumps(measured, indent=2), encoding="utf-8"

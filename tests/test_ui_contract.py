@@ -1,6 +1,8 @@
 """Release checks for the judge-facing UI contract without a browser or network."""
 from __future__ import annotations
 
+import ast
+import re
 import unittest
 from pathlib import Path
 
@@ -8,6 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "app.py").read_text(encoding="utf-8")
 AGENT = (ROOT / "src" / "agent.py").read_text(encoding="utf-8")
+RECORDER = (ROOT / "tools" / "record_judge_demo.py").read_text(encoding="utf-8")
+VIDEO_BUILDER = (ROOT / "tools" / "build_judge_video.py").read_text(encoding="utf-8")
 
 
 class JudgeUiContractTests(unittest.TestCase):
@@ -25,7 +29,7 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn("reading back before any containment claim", APP)
         self.assertIn('"Investigation paused"', APP)
         self.assertIn('on_progress=show_sandbox_progress', APP)
-        self.assertIn('"sandbox_rollback": 90', APP)
+        self.assertIn('"sandbox_rollback": 94', APP)
 
     def test_primary_action_uses_a_deliberate_non_alarm_style(self):
         self.assertIn('button[kind="primary"]', APP)
@@ -51,11 +55,16 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn("provider key remains server-side", APP)
 
     def test_containment_tags_appear_only_after_an_actual_confirmed_action(self):
-        self.assertIn('tags = "" if phase != "contained"', APP)
         self.assertIn('confirmed_action = (st.session_state["report"].get("action") or {}).get("applied")', APP)
+        confirmed = APP.index("if confirmed_action:")
+        contained = APP.index('"contained"', confirmed)
+        readback = APP.index('"The requested tags were read back from DataHub."', contained)
+        self.assertLess(confirmed, contained)
+        self.assertLess(contained, readback)
 
     def test_repair_droid_effect_is_bound_to_the_actual_repair_phase(self):
-        self.assertIn('if phase == "repair" else ""', APP)
+        self.assertIn('progress("repair", "Checking whether the evidence supports a reviewable repair proposal...")', AGENT)
+        self.assertIn("_render_detective(detective_status, display_phase, current_detail)", APP)
         self.assertIn('"Drafting a reviewable repair"', APP)
 
     def test_full_rewrite_walkthrough_is_the_default_judge_path(self):
@@ -119,28 +128,105 @@ class JudgeUiContractTests(unittest.TestCase):
 
     def test_stationary_mascot_appears_inside_real_investigation_progress(self):
         self.assertIn('DROID_NAME = "Trace"', APP)
-        self.assertIn("activity = st.empty()", APP)
-        self.assertIn('"Investigation in progress"', APP)
-        self.assertIn("animation:ld-search 3.6s ease-in-out infinite", APP)
-        self.assertIn("ld-lens-pulse", APP)
-        self.assertIn("ld-scan-beam", APP)
-        self.assertIn("ld-evidence-node", APP)
+        self.assertIn("workflow_status = st.empty()", APP)
+        self.assertIn('aria-label="Verified workflow progress"', APP)
+        self.assertIn("ld-workflow-runner", APP)
+        self.assertIn("ld-workflow-fill", APP)
+        self.assertIn("animation:ld-runner-bob 1.8s ease-in-out infinite", APP)
         self.assertNotIn("animation:ld-spin", APP)
         self.assertNotIn("animation:ld-roam", APP)
         self.assertNotIn("position:fixed", APP)
+        self.assertNotIn("activity = st.empty()", APP)
         self.assertNotIn('st.status("Preparing investigation..."', APP)
         self.assertNotIn("Starting a live evidence path; no diagnosis has been made yet.", APP)
-        self.assertIn("@media (prefers-reduced-motion:reduce)", APP)
+        self.assertIn("@media(prefers-reduced-motion:reduce)", APP)
         self.assertIn('f"Constrained {change_noun} drafted"', APP)
         self.assertIn('"Trace used the returned evidence to propose this exact diff. Nothing has been executed yet."', APP)
 
     def test_every_long_running_ui_path_uses_the_named_droid_panel(self):
         self.assertIn("sandbox_stage = st.empty()", APP)
-        self.assertIn("_droid_action_html(sandbox_titles.get", APP)
+        self.assertIn("sandbox_stage.markdown(", APP)
+        self.assertIn('"sandbox",', APP)
+        self.assertIn("_workflow_html(phase, detail=detail)", APP)
         self.assertNotIn("st.status(", APP)
         self.assertNotIn("status.write(", APP)
         self.assertNotIn("status.update(", APP)
-        self.assertNotIn("bar.progress(sandbox_progress.get(phase, 5), text=", APP)
+        self.assertNotIn("st.progress(", APP)
+
+    def test_title_and_execution_progress_have_distinct_nonduplicated_roles(self):
+        self.assertIn("def _title_html()", APP)
+        self.assertIn('aria-label="Lineage Detective"', APP)
+        self.assertIn("ld-title-mascot", APP)
+        self.assertIn("st.markdown(_title_html(), unsafe_allow_html=True)", APP)
+        self.assertIn("# progress surface; no second execution banner is rendered at the top.", APP)
+        self.assertNotIn("_render_detective(detective_status)", APP)
+        self.assertNotIn("def _detective_html(", APP)
+        self.assertNotIn('aria-label="Lineage Detective status"', APP)
+
+    def test_video_recorder_requires_visible_monotonic_action_local_progress(self):
+        self.assertIn('[aria-label="Verified workflow progress"]', RECORDER)
+        self.assertIn('status.wait_for(state="visible"', RECORDER)
+        self.assertIn("Workflow progress moved backward:", RECORDER)
+        self.assertIn('f"progress:{value}"', RECORDER)
+        self.assertIn('"progress:100"', RECORDER)
+        status_region = RECORDER.split("status = page.locator", 1)[1].split(
+            "complete = page.get_by_text", 1
+        )[0]
+        self.assertNotIn("scroll_into_view_if_needed", status_region)
+        self.assertNotIn("except Exception", status_region)
+
+    def test_video_builder_rejects_narration_overlap(self):
+        self.assertIn("The live timeline, not a minimum narration preference", VIDEO_BUILDER)
+        self.assertIn('"mixed_seconds"', VIDEO_BUILDER)
+        self.assertIn('"ends_at"', VIDEO_BUILDER)
+        self.assertIn("Narration timing collision:", VIDEO_BUILDER)
+        self.assertIn("Final narration overruns the captured video:", VIDEO_BUILDER)
+
+    def test_completed_autonomous_run_cannot_be_rendered_back_as_review(self):
+        autonomous = APP.index("if autonomous_is_current:")
+        handoff = APP.index('workflow_slot.markdown(_workflow_html("handoff")', autonomous)
+        sandbox = APP.index('workflow_slot.markdown(_workflow_html("sandbox")', handoff)
+        review = APP.index('workflow_slot.markdown(_workflow_html("review")', sandbox)
+        self.assertLess(autonomous, handoff)
+        self.assertLess(handoff, sandbox)
+        self.assertLess(sandbox, review)
+
+    def test_preflight_vocabulary_check_does_not_move_progress_past_reasoning(self):
+        vocab_check = APP.index('"Checking the incident-tag vocabulary once before the investigation."')
+        preceding = APP[max(0, vocab_check - 180):vocab_check]
+        self.assertIn('"connecting"', preceding)
+        self.assertNotIn('"containment"', preceding)
+
+    def test_real_autonomous_phase_sequence_is_monotonic(self):
+        tree = ast.parse(APP)
+        progress_map = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_workflow_html":
+                for child in node.body:
+                    if (
+                        isinstance(child, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "progress"
+                                for target in child.targets)
+                    ):
+                        progress_map = ast.literal_eval(child.value.func.value)
+        self.assertIsNotNone(progress_map)
+        agent_phases = re.findall(r'progress\("([^"]+)"', AGENT)
+        displayed_agent_phases = [
+            "report" if phase == "complete" else phase
+            for phase in agent_phases
+        ]
+        full_sequence = (
+            ["connecting"]
+            + displayed_agent_phases
+            + ["contained", "review"]
+            + [
+                "sandbox_reset", "sandbox_seed", "sandbox_baseline",
+                "sandbox_rewrite", "sandbox_verify", "sandbox_rollback",
+                "sandbox_complete", "handoff",
+            ]
+        )
+        values = [progress_map[phase] for phase in full_sequence]
+        self.assertEqual(values, sorted(values), full_sequence)
 
     def test_verified_rewrite_has_a_safe_immediately_selectable_demo_target(self):
         self.assertIn("def _ensure_demo_apply_target(repair: dict | None = None)", APP)
