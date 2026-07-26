@@ -1,0 +1,85 @@
+{
+  "cases": [
+    {
+      "case": "schema-drift",
+      "files": {
+        "human-handoff.zip": {
+          "bytes": 2507,
+          "sha256": "2d31a899dd987b4e021811741ec1c45112b1074f9d9c9ace68e4314a733842aa"
+        },
+        "proposed-change.diff": {
+          "bytes": 511,
+          "sha256": "149342442ecc3681061ebb5231c7b61db70a48219f9017786f1279e2f1078696"
+        },
+        "proposed-model.sql": {
+          "bytes": 114,
+          "sha256": "b4e321e471bb5c46533ef60caa410b7e703f84230d6622b2804fbb9c6e54e4b5"
+        },
+        "sandbox-verification-receipt.json": {
+          "bytes": 3499,
+          "sha256": "88218153170b3578aef92c5d96f6de0f5eedfff96295f32b18dcc24997cfe5a9"
+        }
+      },
+      "proposal_sha256": "b4e321e471bb5c46533ef60caa410b7e703f84230d6622b2804fbb9c6e54e4b5",
+      "receipt_sha256": "fc21a179239fe7b7634eccde292a763e42ce69336f2ca2242803ede25a92c499",
+      "rollback_verified": true,
+      "state": "sandbox_verified",
+      "verified": true
+    },
+    {
+      "case": "partial-load",
+      "files": {
+        "human-handoff.zip": {
+          "bytes": 3200,
+          "sha256": "422fbb274016c2e242d8888eb5c308a0130090c8809e4239d158da9c299431e9"
+        },
+        "proposed-change.diff": {
+          "bytes": 1048,
+          "sha256": "fec1d3a08dea49275590d730f537ce6cb83cd4d777b0f6a4a7606448354cf7eb"
+        },
+        "proposed-model.sql": {
+          "bytes": 839,
+          "sha256": "acceee4aabb9b2ebd832f7467498fdbb2cf40cb3621c5c742f5da6edd57d7af8"
+        },
+        "sandbox-verification-receipt.json": {
+          "bytes": 4505,
+          "sha256": "1c208bf9ce40ffbcfce746a121069bea761d5035fe193e517c7ef30647698a22"
+        }
+      },
+      "proposal_sha256": "acceee4aabb9b2ebd832f7467498fdbb2cf40cb3621c5c742f5da6edd57d7af8",
+      "receipt_sha256": "9fd020b889e0d58cb0b0d3d436750a68eb6f193b5285c890c991fb063d7abe29",
+      "rollback_verified": true,
+      "state": "sandbox_verified",
+      "verified": true
+    },
+    {
+      "case": "stale-feed",
+      "files": {
+        "human-handoff.zip": {
+          "bytes": 2611,
+          "sha256": "3811003fb458b04825458fcb773c763bd64a09dda71dbfbaa5d7cd31c83d5453"
+        },
+        "proposed-change.diff": {
+          "bytes": 509,
+          "sha256": "20bf99680d22ac196b4d58bda862d8fd6b1b022f0465d88d29b1d023171ef801"
+        },
+        "proposed-model.sql": {
+          "bytes": 325,
+          "sha256": "5b4dda12e9325b343d13a220beea46e35b45f81bc89fd0b371867690916e86e8"
+        },
+        "sandbox-verification-receipt.json": {
+          "bytes": 3395,
+          "sha256": "a792e8a5a1e68ec4ec69eea47c46af16f2f076e43419a240389be4417129e1c6"
+        }
+      },
+      "proposal_sha256": "5b4dda12e9325b343d13a220beea46e35b45f81bc89fd0b371867690916e86e8",
+      "receipt_sha256": "4402dab869d388324bec4938ef530e4cc3bd75024a121c1055d95da1950ef765",
+      "rollback_verified": true,
+      "state": "sandbox_verified",
+      "verified": true
+    }
+  ],
+  "generated_at": "2026-07-26T20:42:14.825013+00:00",
+  "generator": "tools/generate_release_examples.py",
+  "verification_contract": "Every case executed the product sandbox, passed its assertion, verified rollback, and produced a hash-bound handoff ZIP."
+}

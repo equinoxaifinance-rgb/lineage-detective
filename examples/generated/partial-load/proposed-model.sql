@@ -1,0 +1,26 @@
+-- Singular dbt test: fail when the newest ingestion is below 80% of the prior-run baseline.
+with ranked_runs as (
+    select
+        cast(run_date as date) as run_date,
+        cast(rows_loaded as double) as rows_loaded,
+        row_number() over (order by cast(run_date as date) desc) as recency_rank
+    from {{ ref('orders_ingestion_history') }}
+),
+baseline as (
+    select avg(rows_loaded) as prior_average
+    from ranked_runs
+    where recency_rank between 2 and 8
+),
+latest as (
+    select run_date, rows_loaded
+    from ranked_runs
+    where recency_rank = 1
+)
+select
+    latest.run_date,
+    latest.rows_loaded,
+    baseline.prior_average,
+    round(100.0 * latest.rows_loaded / nullif(baseline.prior_average, 0), 1) as percent_of_baseline
+from latest
+cross join baseline
+where latest.rows_loaded < baseline.prior_average * 0.80

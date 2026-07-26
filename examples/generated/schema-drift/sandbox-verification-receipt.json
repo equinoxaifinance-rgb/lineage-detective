@@ -1,0 +1,64 @@
+{
+  "action_type": "schema_mapping_dbt_model",
+  "after": {
+    "filled": 8,
+    "name": "email_fill_rate >= 0.9",
+    "passed": true,
+    "rate": 1.0,
+    "total": 8
+  },
+  "after_display": "8/8",
+  "applicable": true,
+  "approval_required": "Selecting the sandbox action is explicit approval for this exact diff.",
+  "approved_by": "release-example-generator",
+  "attempted": true,
+  "before": {
+    "filled": 0,
+    "name": "email_fill_rate >= 0.9",
+    "passed": false,
+    "rate": 0.0,
+    "total": 8
+  },
+  "before_display": "0/8",
+  "broken_build": {
+    "exit_code": 0,
+    "log": "",
+    "ok": true
+  },
+  "current_sql": "-- staging model: types + maps the CRM customer export into the analytics schema.\n-- CRM export v2 exposes the populated contact address as `email_address`; this model still maps\n-- the legacy `email` field, so downstream contactability data resolves NULL.\nselect\n    customer_id,\n    full_name,\n    email as email,\n    created_at\nfrom {{ ref('raw_customers') }}\n",
+  "diff": "--- a/models/stg_customers.sql\n+++ b/models/stg_customers.sql\n@@ -1,9 +1,6 @@\n--- staging model: types + maps the CRM customer export into the analytics schema.\n--- CRM export v2 exposes the populated contact address as `email_address`; this model still maps\n--- the legacy `email` field, so downstream contactability data resolves NULL.\n select\n     customer_id,\n     full_name,\n-    email as email,\n+    email_address as email,\n     created_at\n-from {{ ref('raw_customers') }}\n+from {{ ref('raw_customers') }}",
+  "duration_seconds": 28.348,
+  "file_name": "models/stg_customers.sql",
+  "fixed_build": {
+    "exit_code": 0,
+    "log": "",
+    "ok": true
+  },
+  "fixed_sql": "select\n    customer_id,\n    full_name,\n    email_address as email,\n    created_at\nfrom {{ ref('raw_customers') }}\n",
+  "implementation": "No target system was contacted during this sandbox phase. After verification, the human may separately apply this exact hash-bound rewrite to a selected local model.",
+  "implementation_choice": "After sandbox verification, export the handoff or explicitly apply the exact rewrite to a chosen checked-out dbt model.",
+  "proposal_sha256": "b4e321e471bb5c46533ef60caa410b7e703f84230d6622b2804fbb9c6e54e4b5",
+  "rationale": "Map the observed email_address field back to the downstream email contract.",
+  "receipt_sha256": "fc21a179239fe7b7634eccde292a763e42ce69336f2ca2242803ede25a92c499",
+  "repair_id": "d6d2c46a41104bf3aba4285b22b86309",
+  "representativeness": "This result was verified only in an isolated dbt + DuckDB sandbox with representative demo data. It does not prove production safety: SQL dialect, data volume, permissions, scheduling, concurrency, and downstream contracts can differ. After verification, the human may export the handoff or explicitly apply the exact rewrite to a chosen checked-out dbt model.",
+  "rollback": {
+    "exit_code": 0,
+    "log": "",
+    "ok": true
+  },
+  "rollback_verified": true,
+  "sandbox": "C:\\Users\\Jesse\\AppData\\Local\\Temp\\lineage-detective-run-p5rcupfl\\sandbox",
+  "sandbox_removed": true,
+  "seed": {
+    "exit_code": 0,
+    "log": "",
+    "ok": true
+  },
+  "source_sha256": "f587bece10cef6c8ee555b227d1fae34f220380337eca9e3b41759ea09aff69d",
+  "state": "sandbox_verified",
+  "target": "analytics.staging.stg_customers",
+  "verification_kind": "corrective_rewrite",
+  "verification_summary": "The corrected mapping restored all eight representative email values.",
+  "verified": true
+}

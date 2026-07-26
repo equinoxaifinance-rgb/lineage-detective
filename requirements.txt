@@ -4,6 +4,7 @@
 # current audited release.
 pip==26.1.2
 mcp==1.28.1
+httpx==0.28.1
 anthropic==0.117.0
 python-dotenv==1.2.2
 streamlit==1.59.2

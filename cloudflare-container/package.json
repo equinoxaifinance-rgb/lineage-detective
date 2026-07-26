@@ -1,0 +1,16 @@
+{
+  "name": "lineage-detective-container",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "status": "wrangler containers list"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  },
+  "devDependencies": {
+    "wrangler": "4.114.0"
+  }
+}

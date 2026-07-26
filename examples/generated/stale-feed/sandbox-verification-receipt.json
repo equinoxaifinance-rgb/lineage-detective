@@ -1,0 +1,44 @@
+{
+  "action_type": "stale_feed_guardrail",
+  "after": {
+    "name": "incident_detected_after_guard",
+    "passed": true,
+    "value": "1 failing row(s)"
+  },
+  "after_display": "Incident caught",
+  "applicable": true,
+  "approval_required": "Selecting the sandbox action is explicit approval for this exact diff.",
+  "approved_by": "release-example-generator",
+  "artifact_sha256": "5b4dda12e9325b343d13a220beea46e35b45f81bc89fd0b371867690916e86e8",
+  "attempted": true,
+  "before": {
+    "name": "incident_detected_before_guard",
+    "passed": false,
+    "value": "silent pass"
+  },
+  "before_display": "Silent pass",
+  "current_sql": "-- No freshness guard existed; the frozen feed could report success.\n",
+  "diff": "--- a/tests/exchange_rates_freshness_guard.sql\n+++ b/tests/exchange_rates_freshness_guard.sql\n@@ -1 +1,6 @@\n--- No freshness guard existed; the frozen feed could report success.\n+-- Singular dbt test: fail when the newest exchange rate is more than two days old.\n+select\n+    max(cast(rate_date as date)) as latest_rate_date,\n+    date_diff('day', max(cast(rate_date as date)), current_date) as stale_days\n+from {{ ref('exchange_rates') }}\n+having max(cast(rate_date as date)) < current_date - interval 2 day\n",
+  "duration_seconds": 0.032,
+  "file_name": "tests/exchange_rates_freshness_guard.sql",
+  "fixed_sql": "-- Singular dbt test: fail when the newest exchange rate is more than two days old.\nselect\n    max(cast(rate_date as date)) as latest_rate_date,\n    date_diff('day', max(cast(rate_date as date)), current_date) as stale_days\nfrom {{ ref('exchange_rates') }}\nhaving max(cast(rate_date as date)) < current_date - interval 2 day\n",
+  "implementation": "The exact guardrail was written only to a disposable sandbox, executed against representative incident data, read back by hash, and removed.",
+  "implementation_choice": "After sandbox verification, export the handoff or explicitly apply the exact guardrail to a chosen checked-out dbt test file.",
+  "proposal_sha256": "5b4dda12e9325b343d13a220beea46e35b45f81bc89fd0b371867690916e86e8",
+  "rationale": "A model rewrite cannot invent missing vendor exchange rates. This singular dbt test is the correct code change: it fails when the newest rate is more than two days old, forcing the upstream feed to be repaired before stale output ships.",
+  "receipt_sha256": "4402dab869d388324bec4938ef530e4cc3bd75024a121c1055d95da1950ef765",
+  "repair_id": "ede78731c6944e6a80f7d78de4cc7693",
+  "representativeness": "This result was verified only in an isolated dbt + DuckDB sandbox with representative demo data. It does not prove production safety: SQL dialect, data volume, permissions, scheduling, concurrency, and downstream contracts can differ. After verification, the human may export the handoff or explicitly apply the exact rewrite to a chosen checked-out dbt model.",
+  "rollback": {
+    "ok": true
+  },
+  "rollback_verified": true,
+  "sandbox": "C:\\Users\\Jesse\\AppData\\Local\\Temp\\lineage-detective-run-72l_5p6n\\sandbox",
+  "sandbox_removed": true,
+  "source_sha256": "923500f961b61e78d44a83d6d456806ab6ac9cd9893772ba4d31b796f4e9c8a8",
+  "state": "sandbox_verified",
+  "target": "tests/exchange_rates_freshness_guard.sql",
+  "verification_kind": "guardrail_detection",
+  "verification_summary": "The new freshness guard detected the seeded six-day-old FX feed.",
+  "verified": true
+}

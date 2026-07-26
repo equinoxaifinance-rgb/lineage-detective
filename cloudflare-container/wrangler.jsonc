@@ -1,0 +1,29 @@
+{
+  "name": "lineage-detective",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-26",
+  "containers": [
+    {
+      "max_instances": 2,
+      "class_name": "LineageDetectiveContainer",
+      "image": "../Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "lite",
+      "rollout_step_percentage": 100
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LINEAGE_DETECTIVE",
+        "class_name": "LineageDetectiveContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["LineageDetectiveContainer"]
+    }
+  ]
+}

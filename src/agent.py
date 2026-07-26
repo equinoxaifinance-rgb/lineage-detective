@@ -16,6 +16,7 @@ import sys
 import urllib.error
 import urllib.request
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from datahub_mcp import MCPDataHub
@@ -270,7 +271,9 @@ def _evidence_only_report(nodes: list[NodeEvidence]) -> dict:
 def investigate(symptom: str, affected_urn: str, *, server: str, token: str | None = None,
                 max_hops: int = 3, model: str = "claude-sonnet-5", act: bool = False,
                 on_progress=None, reasoning_mode: str = "auto", reasoning_endpoint: str | None = None,
-                judge_code: str | None = None) -> dict:
+                judge_code: str | None = None,
+                repair_artifact: dict | None = None,
+                mcp_url: str | None = None) -> dict:
     """Run the full autonomous investigation. Returns the parsed root-cause report.
     If act=True, the agent quarantines the top high/medium-confidence suspect in DataHub.
     All DataHub access — reads and the write-back — flows through the DataHub MCP Server."""
@@ -280,7 +283,7 @@ def investigate(symptom: str, affected_urn: str, *, server: str, token: str | No
             on_progress(phase, detail)
 
     progress("connecting", "Opening the official DataHub MCP connection...")
-    with MCPDataHub(gms_url=server, token=token) as client:
+    with MCPDataHub(gms_url=server, token=token, mcp_url=mcp_url) as client:
         progress("evidence", f"Reading the affected asset and up to {max_hops} upstream lineage hops...")
         evidence = gather_upstream(client, affected_urn, max_hops=max_hops)
         progress("reasoning", f"DataHub returned {len(evidence)} evidence nodes. Grounding the diagnosis in those facts...")
@@ -322,14 +325,21 @@ def investigate(symptom: str, affected_urn: str, *, server: str, token: str | No
                 report["action"] = quarantine_node(client, top["urn"], note=top.get("why"))
                 report["blast_radius"] = map_and_contain_blast_radius(client, top["urn"])
 
-        # A repair is never an automatic continuation of containment. For the supported
-        # schema-mapping class we may generate a reviewable diff, but a human must explicitly
-        # approve the later sandbox trial in the UI. No production apply path exists.
+        # A repair is never an automatic continuation of containment. We may generate a
+        # reviewable diff, but the UI requires an explicit sandbox action before it offers a
+        # separate hash-bound apply action against a checked-out file. Deployment remains outside
+        # this agent because a local file write is not proof of production correctness.
         if report.get("suspects") and use_model:
             try:
                 from repair import propose_repair
-                progress("repair", "Checking whether the evidence supports a reviewable sandbox-only repair proposal...")
-                proposal = propose_repair(llm, report, evidence, model=model)
+                progress("repair", "Checking whether the evidence supports a reviewable repair proposal...")
+                proposal = propose_repair(
+                    llm,
+                    report,
+                    evidence,
+                    model=model,
+                    target_artifact=repair_artifact,
+                )
                 if proposal:
                     report["repair"] = proposal
             except Exception as e:  # additive only; diagnosis/containment remain available
@@ -396,7 +406,7 @@ def render_report(report: dict, symptom: str, affected_urn: str) -> str:
     rep = report.get("repair")
     if rep and rep.get("state") == "approval_required":
         L.append("")
-        L.append("REPAIR PROPOSAL — human approval required before a sandbox-only trial")
+        L.append("REPAIR PROPOSAL — explicit sandbox action required before implementation")
         L.append(f"  target: {rep.get('target', '?')}")
         L.append(f"  rationale: {rep.get('rationale', '').strip()}")
         if rep.get("diff"):
@@ -434,10 +444,34 @@ if __name__ == "__main__":
     p.add_argument("affected_urn")
     p.add_argument("--server", default=os.environ.get("DATAHUB_SERVER", "http://localhost:8080"))
     p.add_argument("--token", default=os.environ.get("DATAHUB_TOKEN"))
+    p.add_argument(
+        "--mcp-url", default=os.environ.get("DATAHUB_MCP_URL"),
+        help="optional DataHub Cloud managed MCP endpoint (streamable HTTP)",
+    )
     p.add_argument("--max-hops", type=int, default=3)
     p.add_argument("--format", choices=["report", "json"], default="report")
     p.add_argument("--act", action="store_true", help="quarantine the top suspect in DataHub")
+    p.add_argument(
+        "--repair-file",
+        help="optional existing checked-out dbt .sql file to inspect and propose a constrained repair for",
+    )
     args = p.parse_args()
+    repair_artifact = None
+    if args.repair_file:
+        repair_path = Path(args.repair_file).expanduser().resolve(strict=True)
+        if repair_path.is_symlink() or not repair_path.is_file() or repair_path.suffix.lower() != ".sql":
+            p.error("--repair-file must be an existing regular .sql file")
+        if repair_path.stat().st_size > 200_000:
+            p.error("--repair-file exceeds the 200 KB repair limit")
+        try:
+            repair_sql = repair_path.read_text(encoding="utf-8")
+        except UnicodeError:
+            p.error("--repair-file must be UTF-8 text")
+        repair_artifact = {
+            "path": str(repair_path),
+            "file_name": repair_path.name,
+            "sql": repair_sql,
+        }
     if args.act:  # catalog SETUP on any instance (create-if-missing incident tags); the agent stays pure-MCP
         try:
             from setup_vocab import ensure_incident_vocabulary
@@ -446,7 +480,8 @@ if __name__ == "__main__":
             print(f"[setup] tag vocabulary ensure skipped ({type(_e).__name__}) — "
                   f"if acting fails, create QUARANTINE_INCIDENT / IMPACTED_BY_INCIDENT once in your catalog.")
     out = investigate(args.symptom, args.affected_urn, server=args.server, token=args.token,
-                      max_hops=args.max_hops, act=args.act)
+                      max_hops=args.max_hops, act=args.act, repair_artifact=repair_artifact,
+                      mcp_url=args.mcp_url)
     if args.format == "json":
         print(json.dumps(out, indent=2, default=str))
     else:

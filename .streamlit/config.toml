@@ -1,8 +1,15 @@
-# Clean look for the demo — hides Streamlit's dev toolbar so it reads as a product,
-# and disables the first-run usage-stats prompt. Keeps the default light theme (the
-# in-app cards/graph are designed for a light background).
+# Product presentation: minimize Streamlit chrome, disable usage telemetry, and use the
+# high-contrast dark palette shared by the evidence cards and Trace status surface.
 [client]
 toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#22D3EE"
+backgroundColor = "#060A12"
+secondaryBackgroundColor = "#0D1624"
+textColor = "#E6EDF7"
+font = "sans serif"

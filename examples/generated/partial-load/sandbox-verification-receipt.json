@@ -1,0 +1,44 @@
+{
+  "action_type": "partial_load_guardrail",
+  "after": {
+    "name": "incident_detected_after_guard",
+    "passed": true,
+    "value": "1 failing row(s)"
+  },
+  "after_display": "Incident caught",
+  "applicable": true,
+  "approval_required": "Selecting the sandbox action is explicit approval for this exact diff.",
+  "approved_by": "release-example-generator",
+  "artifact_sha256": "acceee4aabb9b2ebd832f7467498fdbb2cf40cb3621c5c742f5da6edd57d7af8",
+  "attempted": true,
+  "before": {
+    "name": "incident_detected_before_guard",
+    "passed": false,
+    "value": "silent pass"
+  },
+  "before_display": "Silent pass",
+  "current_sql": "-- No volume guard existed; the incomplete ingestion could report success.\n",
+  "diff": "--- a/tests/orders_ingestion_volume_guard.sql\n+++ b/tests/orders_ingestion_volume_guard.sql\n@@ -1 +1,26 @@\n--- No volume guard existed; the incomplete ingestion could report success.\n+-- Singular dbt test: fail when the newest ingestion is below 80% of the prior-run baseline.\n+with ranked_runs as (\n+    select\n+        cast(run_date as date) as run_date,\n+        cast(rows_loaded as double) as rows_loaded,\n+        row_number() over (order by cast(run_date as date) desc) as recency_rank\n+    from {{ ref('orders_ingestion_history') }}\n+),\n+baseline as (\n+    select avg(rows_loaded) as prior_average\n+    from ranked_runs\n+    where recency_rank between 2 and 8\n+),\n+latest as (\n+    select run_date, rows_loaded\n+    from ranked_runs\n+    where recency_rank = 1\n+)\n+select\n+    latest.run_date,\n+    latest.rows_loaded,\n+    baseline.prior_average,\n+    round(100.0 * latest.rows_loaded / nullif(baseline.prior_average, 0), 1) as percent_of_baseline\n+from latest\n+cross join baseline\n+where latest.rows_loaded < baseline.prior_average * 0.80\n",
+  "duration_seconds": 0.032,
+  "file_name": "tests/orders_ingestion_volume_guard.sql",
+  "fixed_sql": "-- Singular dbt test: fail when the newest ingestion is below 80% of the prior-run baseline.\nwith ranked_runs as (\n    select\n        cast(run_date as date) as run_date,\n        cast(rows_loaded as double) as rows_loaded,\n        row_number() over (order by cast(run_date as date) desc) as recency_rank\n    from {{ ref('orders_ingestion_history') }}\n),\nbaseline as (\n    select avg(rows_loaded) as prior_average\n    from ranked_runs\n    where recency_rank between 2 and 8\n),\nlatest as (\n    select run_date, rows_loaded\n    from ranked_runs\n    where recency_rank = 1\n)\nselect\n    latest.run_date,\n    latest.rows_loaded,\n    baseline.prior_average,\n    round(100.0 * latest.rows_loaded / nullif(baseline.prior_average, 0), 1) as percent_of_baseline\nfrom latest\ncross join baseline\nwhere latest.rows_loaded < baseline.prior_average * 0.80\n",
+  "implementation": "The exact guardrail was written only to a disposable sandbox, executed against representative incident data, read back by hash, and removed.",
+  "implementation_choice": "After sandbox verification, export the handoff or explicitly apply the exact guardrail to a chosen checked-out dbt test file.",
+  "proposal_sha256": "acceee4aabb9b2ebd832f7467498fdbb2cf40cb3621c5c742f5da6edd57d7af8",
+  "rationale": "The missing source rows cannot be recreated honestly from downstream SQL. This singular dbt test is the correct code change: it makes a run fail when the newest load falls below 80% of the previous seven-run baseline instead of silently shipping.",
+  "receipt_sha256": "9fd020b889e0d58cb0b0d3d436750a68eb6f193b5285c890c991fb063d7abe29",
+  "repair_id": "41618e7f6e2149998f963cc083335ab3",
+  "representativeness": "This result was verified only in an isolated dbt + DuckDB sandbox with representative demo data. It does not prove production safety: SQL dialect, data volume, permissions, scheduling, concurrency, and downstream contracts can differ. After verification, the human may export the handoff or explicitly apply the exact rewrite to a chosen checked-out dbt model.",
+  "rollback": {
+    "ok": true
+  },
+  "rollback_verified": true,
+  "sandbox": "C:\\Users\\Jesse\\AppData\\Local\\Temp\\lineage-detective-run-gfeoziax\\sandbox",
+  "sandbox_removed": true,
+  "source_sha256": "6b40f1ed76cb992305b9b240834c60a365fa8a355b812f8531633669ec01b050",
+  "state": "sandbox_verified",
+  "target": "tests/orders_ingestion_volume_guard.sql",
+  "verification_kind": "guardrail_detection",
+  "verification_summary": "The new volume guard detected the seeded 44% ingestion shortfall.",
+  "verified": true
+}

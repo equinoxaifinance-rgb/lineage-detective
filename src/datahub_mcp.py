@@ -22,8 +22,15 @@ import shutil
 import sys
 import threading
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
+
+try:
+    from .network_policy import validate_network_url, validate_resolution
+except ImportError:
+    from network_policy import validate_network_url, validate_resolution
 
 
 def _server_command() -> tuple[str, list[str]]:
@@ -85,9 +92,23 @@ class MCPDataHub:
     def __init__(self, gms_url: str | None = None, token: str | None = None,
                  enable_mutations: bool = True, startup_timeout: float = 45.0,
                  tool_timeout: float = 30.0,
-                 server_command: tuple[str, list[str]] | None = None):
+                 server_command: tuple[str, list[str]] | None = None,
+                 mcp_url: str | None = None):
         self.gms_url = gms_url or os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
         self.token = token if token is not None else os.environ.get("DATAHUB_GMS_TOKEN", "")
+        self.mcp_url = mcp_url or os.environ.get("DATAHUB_MCP_URL")
+        self.allow_private_network = os.environ.get("HOSTED_MODE") != "1"
+        self.gms_url = validate_network_url(
+            self.gms_url,
+            allow_private=self.allow_private_network,
+            label="DataHub server URL",
+        )
+        if self.mcp_url:
+            self.mcp_url = validate_network_url(
+                self.mcp_url,
+                allow_private=self.allow_private_network,
+                label="DataHub MCP URL",
+            )
         self.enable_mutations = enable_mutations
         # Bound startup so a failed catalog connection cannot leave the UI at
         # "Connecting" indefinitely. Individual tool calls retain their own timeout.
@@ -133,48 +154,81 @@ class MCPDataHub:
 
     async def _serve(self) -> None:
         try:
-            cmd, args = self._server_command_override or _server_command()
-            env = dict(os.environ)
-            env["DATAHUB_GMS_URL"] = self.gms_url
-            env["DATAHUB_GMS_TOKEN"] = self.token or ""
-            env["TOOLS_IS_MUTATION_ENABLED"] = "true" if self.enable_mutations else "false"
-            params = StdioServerParameters(command=cmd, args=args, env=env)
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    try:
-                        await asyncio.wait_for(session.initialize(), timeout=self.startup_timeout)
-                    except asyncio.TimeoutError as exc:
-                        raise TimeoutError(
-                            f"DataHub MCP did not initialize within {self.startup_timeout:.1f}s. "
-                            "Check the catalog connection and retry."
-                        ) from exc
-                    listed = await session.list_tools()
-                    self.tools = {t.name for t in listed.tools}
-                    self._ready.set()
-                    loop = asyncio.get_event_loop()
-                    while True:
-                        req = await loop.run_in_executor(None, self._reqq.get)
-                        if req is None:
-                            break
-                        tool, targs, fut = req
-                        try:
-                            res = await asyncio.wait_for(
-                                session.call_tool(tool, targs), timeout=self.tool_timeout
-                            )
-                            text = "".join(getattr(c, "text", "") for c in (res.content or []))
-                            fut.set_result(text)
-                        except asyncio.TimeoutError as exc:
-                            fut.set_exception(TimeoutError(
-                                f"DataHub MCP tool '{tool}' did not respond within "
-                                f"{self.tool_timeout:.1f}s. Check the catalog connection and retry."
-                            ))
-                        except BaseException as e:  # surface to the caller, keep serving
-                            fut.set_exception(e)
+            if self.mcp_url:
+                await self._serve_remote()
+            else:
+                await self._serve_stdio()
         except BaseException as e:
             # anyio may wrap a timed-out initialize in an ExceptionGroup while
             # shutting down stdio. Preserve the actionable cause for the UI.
             self._open_error = _startup_timeout_from(e) or e
             self._ready.set()
+
+    async def _serve_stdio(self) -> None:
+        """Use the isolated official MCP subprocess for local/Core/GMS deployments."""
+        cmd, args = self._server_command_override or _server_command()
+        env = dict(os.environ)
+        env["DATAHUB_GMS_URL"] = self.gms_url
+        env["DATAHUB_GMS_TOKEN"] = self.token or ""
+        env["TOOLS_IS_MUTATION_ENABLED"] = "true" if self.enable_mutations else "false"
+        # This agent never calls the optional document-search tools. Disabling that surface
+        # prevents the official server from running a catalog-wide document-existence query
+        # during every startup while preserving lineage, entity, search, and tag operations.
+        env["DATAHUB_MCP_DOCUMENT_TOOLS_DISABLED"] = "true"
+        params = StdioServerParameters(command=cmd, args=args, env=env)
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await self._serve_session(session)
+
+    async def _serve_remote(self) -> None:
+        """Connect directly to DataHub Cloud's managed streamable-HTTP MCP endpoint."""
+        validate_resolution(
+            str(self.mcp_url),
+            allow_private=self.allow_private_network,
+            label="DataHub MCP URL",
+        )
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        async with httpx.AsyncClient(
+            headers=headers,
+            timeout=self.tool_timeout,
+            follow_redirects=False,
+        ) as http_client:
+            async with streamable_http_client(str(self.mcp_url), http_client=http_client) as streams:
+                read, write, _session_id = streams
+                async with ClientSession(read, write) as session:
+                    await self._serve_session(session)
+
+    async def _serve_session(self, session: ClientSession) -> None:
+        """Initialize either transport once, then service synchronous facade requests."""
+        try:
+            await asyncio.wait_for(session.initialize(), timeout=self.startup_timeout)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"DataHub MCP did not initialize within {self.startup_timeout:.1f}s. "
+                "Check the catalog connection and retry."
+            ) from exc
+        listed = await session.list_tools()
+        self.tools = {t.name for t in listed.tools}
+        self._ready.set()
+        loop = asyncio.get_event_loop()
+        while True:
+            req = await loop.run_in_executor(None, self._reqq.get)
+            if req is None:
+                break
+            tool, targs, fut = req
+            try:
+                res = await asyncio.wait_for(
+                    session.call_tool(tool, targs), timeout=self.tool_timeout
+                )
+                text = "".join(getattr(c, "text", "") for c in (res.content or []))
+                fut.set_result(text)
+            except asyncio.TimeoutError:
+                fut.set_exception(TimeoutError(
+                    f"DataHub MCP tool '{tool}' did not respond within "
+                    f"{self.tool_timeout:.1f}s. Check the catalog connection and retry."
+                ))
+            except BaseException as e:  # surface to the caller, keep serving
+                fut.set_exception(e)
 
     # ---- raw tool call ---------------------------------------------------------
     def _call(self, tool: str, args: dict) -> str:
@@ -201,6 +255,39 @@ class MCPDataHub:
             return None
 
     # ---- high-level DataHub reads/writes (via MCP tools) -----------------------
+    def search(self, query: str, *, num_results: int = 12,
+               entity_filter: str | None = None) -> list[dict]:
+        """Search the connected tenant and return compact, selectable entity records.
+
+        The official MCP search tool expects structured queries beginning with ``/q``.
+        Human input is normalized here so the UI can accept ordinary words.
+        """
+        cleaned = " ".join(str(query or "").split()).strip()
+        if not cleaned:
+            return []
+        structured = cleaned if cleaned.startswith("/q") else f"/q {cleaned}"
+        args: dict[str, object] = {
+            "query": structured,
+            "num_results": max(1, min(int(num_results), 50)),
+        }
+        if entity_filter:
+            args["filter"] = entity_filter
+        data = self._loads(self._call("search", args)) or {}
+        rows = data.get("searchResults", []) if isinstance(data, dict) else []
+        results: list[dict] = []
+        for row in rows:
+            entity = row.get("entity", {}) if isinstance(row, dict) else {}
+            urn = entity.get("urn") if isinstance(entity, dict) else None
+            if not urn:
+                continue
+            properties = entity.get("properties") or {}
+            name = properties.get("name") if isinstance(properties, dict) else None
+            results.append({
+                "urn": str(urn),
+                "name": str(name or _urn_name(str(urn))),
+            })
+        return results
+
     def get_lineage(self, urn: str, upstream: bool = True, max_hops: int = 3,
                     max_results: int = 40) -> list[dict]:
         """Call the MCP `get_lineage` tool; return the list of entity dicts in that direction."""
@@ -235,3 +322,12 @@ class MCPDataHub:
 
 def _tag_urns(entity: dict) -> list[str]:
     return [t.get("tag", {}).get("urn") for t in ((entity.get("tags") or {}).get("tags") or [])]
+
+
+def _urn_name(urn: str) -> str:
+    parts = urn.rsplit("(", 1)[-1].rstrip(")").split(",")
+    if len(parts) >= 3:
+        return parts[-2]
+    if len(parts) == 2:
+        return parts[-1]
+    return urn

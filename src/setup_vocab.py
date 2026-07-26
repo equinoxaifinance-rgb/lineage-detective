@@ -1,8 +1,9 @@
-"""Provision incident tags through the isolated DataHub sidecar.
+"""Provision the incident-tag vocabulary and verify it by readback.
 
-This is catalog setup, not agent behavior. The judge-facing app remains a clean
-MCP client; the official DataHub SDK performs the one create-if-missing setup
-inside `.datahub-mcp-venv` only.
+Local quickstart uses the isolated official-SDK sidecar. Hosted DataHub Cloud
+deployments use the tenant's GraphQL API because there is no local SDK process
+inside that runtime. Both paths create the same tags and read them back before
+returning success.
 """
 from __future__ import annotations
 
@@ -10,6 +11,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import json
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+try:
+    from .network_policy import validate_network_url, validate_resolution
+except ImportError:
+    from network_policy import validate_network_url, validate_resolution
 
 INCIDENT_VOCABULARY = (
     ("QUARANTINE_INCIDENT", "Root cause of a data incident — quarantined by Lineage Detective."),
@@ -28,14 +36,16 @@ def _sidecar_python() -> str:
 
 
 def ensure_incident_vocabulary(server: str, token: str | None = None) -> list[str]:
-    """Create the two tag entities via the isolated official-SDK sidecar.
-
-    Raises a concrete setup error when quickstart has not provisioned the
-    sidecar, rather than silently falling back to an unpinned global install.
-    """
+    """Create and read back the two tag entities through the available route."""
+    allow_private = os.environ.get("HOSTED_MODE") != "1"
+    server = validate_network_url(
+        server,
+        allow_private=allow_private,
+        label="DataHub server URL",
+    )
     python = _sidecar_python()
     if not os.path.exists(python):
-        raise RuntimeError("DataHub sidecar is missing; run `python quickstart.py` first.")
+        return _ensure_via_graphql(server, token)
     env = dict(os.environ)
     env["DATAHUB_GMS_URL"] = server
     if token:
@@ -46,3 +56,54 @@ def ensure_incident_vocabulary(server: str, token: str | None = None) -> list[st
         detail = (result.stderr or result.stdout or "unknown sidecar error").strip()
         raise RuntimeError(f"DataHub tag setup failed: {detail}")
     return [name for name, _ in INCIDENT_VOCABULARY]
+
+
+def _graphql(server: str, token: str | None, query: str, variables: dict) -> dict:
+    allow_private = os.environ.get("HOSTED_MODE") != "1"
+    validate_resolution(
+        server,
+        allow_private=allow_private,
+        label="DataHub server URL",
+    )
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(
+        f"{server.rstrip('/')}/api/graphql",
+        data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    class _RejectRedirect(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise RuntimeError(f"DataHub GraphQL returned an unexpected redirect to {newurl}")
+
+    with build_opener(_RejectRedirect).open(request, timeout=20) as response:
+        return json.loads(response.read() or b"{}")
+
+
+def _ensure_via_graphql(server: str, token: str | None) -> list[str]:
+    """Container/Cloud fallback: create and read back the two tags without the SDK sidecar."""
+    query = "query TagByUrn($urn: String!) { tag(urn: $urn) { urn } }"
+    create = """
+    mutation CreateTag($input: CreateTagInput!) {
+      createTag(input: $input)
+    }
+    """
+    created: list[str] = []
+    for name, description in INCIDENT_VOCABULARY:
+        urn = f"urn:li:tag:{name}"
+        before = _graphql(server, token, query, {"urn": urn})
+        existing = ((before.get("data") or {}).get("tag") or {}).get("urn")
+        if not existing:
+            result = _graphql(
+                server, token, create,
+                {"input": {"name": name, "id": name, "description": description}},
+            )
+            if (result.get("data") or {}).get("createTag") != urn:
+                raise RuntimeError(f"DataHub did not confirm creation of {urn}: {result.get('errors')}")
+        after = _graphql(server, token, query, {"urn": urn})
+        if ((after.get("data") or {}).get("tag") or {}).get("urn") != urn:
+            raise RuntimeError(f"DataHub did not read back {urn} after setup")
+        created.append(name)
+    return created

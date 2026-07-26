@@ -5,6 +5,10 @@ __pycache__/
 .env
 judge-gateway/.wrangler/
 tmp-ui-smoke-*.log
+.lineage-detective-demo/
+cloudflare-container/node_modules/
+cloudflare-container/.wrangler/
+cloudflare-container/dist-dry-run/
 
 # video build artifacts
 cap/
