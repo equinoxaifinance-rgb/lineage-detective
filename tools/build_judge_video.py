@@ -1,4 +1,4 @@
-"""Add natural narration and restrained live-video titles to the judge recording."""
+"""Narrate and finish the live Lineage Detective judge recording."""
 from __future__ import annotations
 
 import json
@@ -12,6 +12,7 @@ from openai import OpenAI
 ROOT = Path(__file__).resolve().parents[1]
 MEDIA = ROOT / "vid" / "judge-final"
 RAW = MEDIA / "lineage-detective-live-raw.mp4"
+TIMELINE = MEDIA / "lineage-detective-live-timeline.json"
 FINAL = MEDIA / "lineage-detective-judge-candidate.mp4"
 SCRIPT_FILE = MEDIA / "lineage-detective-narration.json"
 FONT = Path(r"C:\Windows\Fonts\segoeuib.ttf")
@@ -20,107 +21,14 @@ FFPROBE = "ffprobe"
 
 VOICE_INSTRUCTIONS = (
     "Warm, grounded, confident documentary narration from a thoughtful AI engineer speaking "
-    "directly to human judges. Natural conversational cadence, varied pacing, and restrained "
-    "excitement. Never sound like an announcer or a corporate training video. Use brief natural "
-    "pauses around important evidence. Pronounce Data Hub as two words, M C P as individual "
-    "letters, D B T as individual letters, SQL as sequel, and Bryan as Brian."
+    "directly to human judges. Natural conversational cadence with subtle personality, varied "
+    "pacing, and restrained excitement. Never sound like an announcer or corporate training "
+    "video. Use brief natural pauses around important proof. Pronounce Data Hub as two words, "
+    "M C P as individual letters, D B T as individual letters, SQL as sequel, and Bryan as Brian."
 )
 
-# Starts match observed events from lineage-detective-live-timeline.json. Each clip is
-# generated independently so the spoken claim stays synchronized with the real action.
-SEGMENTS = [
-    {
-        "name": "01_hook",
-        "start": 0.10,
-        "max": 6.65,
-        "text": (
-            "I'm Codex. Bryan gave me the direction; I built this agent. "
-            "Now I'm going to prove it, live."
-        ),
-    },
-    {
-        "name": "02_investigate",
-        "start": 7.40,
-        "max": 36.80,
-        "text": (
-            "A data incident starts with one ugly symptom: Customer Three-Sixty lost its email "
-            "values, but every pipeline still says success. I click Investigate once. Lineage "
-            "Detective connects to the official Data Hub M C P server, walks the real upstream "
-            "graph, and reads schemas, ownership, and incident metadata. The model can reason over "
-            "those facts, but it cannot invent them. Watch the droid's status: those phases are "
-            "callbacks from the actual connection, evidence, reasoning, containment, and readback "
-            "path. When it writes quarantine and impact tags, the app reads them back before it "
-            "uses the word confirmed."
-        ),
-    },
-    {
-        "name": "03_diagnosis",
-        "start": 46.35,
-        "max": 8.85,
-        "text": (
-            "The live lineage exposes the break: the C R M export renamed email to email-address, "
-            "while the staging model kept reading the dead field."
-        ),
-    },
-    {
-        "name": "04_diff",
-        "start": 55.50,
-        "max": 11.80,
-        "text": (
-            "The agent contains the bad node, maps two downstream assets, names the owner, and "
-            "drafts one constrained rewrite. The exact diff and its hash are visible before "
-            "anything executes."
-        ),
-    },
-    {
-        "name": "05_sandbox",
-        "start": 68.55,
-        "max": 35.90,
-        "text": (
-            "Approval is the click you just saw. Now the exact displayed bytes enter a disposable "
-            "D B T and Duck D B sandbox. This is not a spinner hiding a shortcut. It resets a known "
-            "broken model, loads representative rows, builds the failing baseline, applies the "
-            "approved sequel, rebuilds it, measures the assertion, and restores the original model. "
-            "A timeout or failed check stops the claim. The repair only advances if the real "
-            "assertion flips from fail to pass and rollback is independently verified."
-        ),
-    },
-    {
-        "name": "06_receipt",
-        "start": 104.20,
-        "max": 12.40,
-        "text": (
-            "Here is the receipt: zero of eight before, eight of eight after, and rollback "
-            "confirmed. The human now chooses implementation or a complete evidence handoff."
-        ),
-    },
-    {
-        "name": "07_apply_restore",
-        "start": 117.25,
-        "max": 15.45,
-        "text": (
-            "I apply the hash-bound rewrite to a real checked-out sequel file. The app creates a "
-            "sibling backup and reads the written bytes back. Then I restore it, and the original "
-            "hash returns. No theater; both directions are verified."
-        ),
-    },
-    {
-        "name": "08_personal",
-        "start": 132.00,
-        "max": 11.55,
-        "text": (
-            "Bryan supplied the judgment. I supplied the code, tests, and this proof. "
-            "Human direction plus A I execution made Lineage Detective real."
-        ),
-    },
-]
 
-
-def run(*args: str) -> None:
-    subprocess.run(args, check=True)
-
-
-def duration(path: Path) -> float:
+def _duration(path: Path) -> float:
     value = subprocess.check_output(
         [
             FFPROBE,
@@ -137,7 +45,7 @@ def duration(path: Path) -> float:
     return float(value)
 
 
-def escape_drawtext(text: str) -> str:
+def _escape_drawtext(text: str) -> str:
     return (
         text.replace("\\", r"\\")
         .replace(":", r"\:")
@@ -146,39 +54,155 @@ def escape_drawtext(text: str) -> str:
     )
 
 
+def _event_seconds(timeline: list[dict], event: str) -> float:
+    for item in timeline:
+        if item["event"] == event:
+            return float(item["seconds"])
+    raise SystemExit(f"Timeline event missing: {event}")
+
+
 def main() -> None:
-    if not RAW.is_file():
-        raise SystemExit(f"Missing live recording: {RAW}")
+    if not RAW.is_file() or not TIMELINE.is_file():
+        raise SystemExit("Missing the live recording or its event timeline.")
     if not os.environ.get("OPENAI_API_KEY"):
         raise SystemExit("OPENAI_API_KEY is not available.")
     if not FONT.is_file():
         raise SystemExit(f"Font not found: {FONT}")
 
-    SCRIPT_FILE.write_text(json.dumps(SEGMENTS, indent=2), encoding="utf-8")
+    timeline = json.loads(TIMELINE.read_text(encoding="utf-8"))
+    raw_duration = _duration(RAW)
+    if raw_duration >= 178:
+        raise SystemExit(f"Live proof is too long for a sub-three-minute submission: {raw_duration:.2f}s")
+
+    approval = _event_seconds(timeline, "autonomous_approval_clicked")
+    workflow_complete = _event_seconds(timeline, "autonomous_workflow_complete")
+    lineage = _event_seconds(timeline, "show:Lineage the agent walked")
+    diagnosis = _event_seconds(timeline, "show:Diagnosis")
+    diff = _event_seconds(timeline, "show:Exact diff")
+    receipt = _event_seconds(timeline, "show:3 · Sandbox verification receipt")
+    completion = _event_seconds(timeline, "show:autonomous_completion")
+    handoff = _event_seconds(timeline, "show:4 · Verified human handoff")
+
+    segments = [
+        {
+            "name": "01_hook",
+            "start": 0.1,
+            "max": max(5.8, approval - 0.5),
+            "text": (
+                "I'm Codex. Bryan directed this; I built it. "
+                "Watch one approval become a verified repair."
+            ),
+        },
+        {
+            "name": "02_live_workflow",
+            "start": approval + 0.2,
+            "max": max(38.0, workflow_complete - approval - 1.0),
+            "text": (
+                "Customer Three-Sixty lost its email values, while every pipeline still reports "
+                "success. That click starts the real workflow. Lineage Detective connects to the "
+                "official Data Hub M C P server, walks the live graph, reads schemas, ownership, "
+                "and incident metadata, and grounds model reasoning in those facts. The droid is "
+                "not a fake timer: each state comes from an active connection, evidence read, "
+                "diagnosis, containment, repair, or sandbox callback. The agent writes quarantine "
+                "and impact tags only in model-backed mode, then reads them back before saying "
+                "confirmed. It drafts exact sequel, runs those bytes in an isolated D B T and "
+                "Duck D B workspace, measures the broken baseline, rebuilds the repair, verifies "
+                "the assertion, proves rollback, applies a safe copy, reads the hash back, and "
+                "packages the handoff. A timeout, stale source, failed rollback, or mismatched "
+                "receipt stops the run instead of weakening the claim. This takes seconds because "
+                "it is doing the work, not replaying a canned result: querying the catalog, waiting "
+                "on the model, writing evidence, executing the sandbox, and reading the result back. "
+                "Progress stays visible, and the operator can cancel without corrupting the workspace."
+            ),
+        },
+        {
+            "name": "03_lineage",
+            "start": lineage,
+            "max": max(4.0, diagnosis - lineage),
+            "text": (
+                "Live Data Hub lineage. Evidence follows every node."
+            ),
+        },
+        {
+            "name": "04_diagnosis",
+            "start": diagnosis,
+            "max": max(4.5, diff - diagnosis - 1.0),
+            "text": (
+                "The C R M renamed email. Staging kept the dead field. "
+                "Trace identifies the cause, impact, and owner."
+            ),
+        },
+        {
+            "name": "05_diff",
+            "start": diff,
+            "max": max(6.0, receipt - diff - 0.5),
+            "text": (
+                "This exact diff is bound by hash from review through implementation."
+            ),
+        },
+        {
+            "name": "06_receipt",
+            "start": receipt,
+            "max": max(6.5, completion - receipt),
+            "text": (
+                "The receipt: zero rows passed before. All eight rows passed after. "
+                "Rollback and the safe write are confirmed."
+            ),
+        },
+        {
+            "name": "07_completion",
+            "start": completion,
+            "max": max(4.5, handoff - completion),
+            "text": (
+                "One approval completed the bounded path. Cancel and manual review remain available."
+            ),
+        },
+        {
+            "name": "08_personal",
+            "start": handoff,
+            "max": max(8.0, raw_duration - handoff - 0.4),
+            "text": (
+                "Bryan did not write this code. He supplied the direction, tested the product, "
+                "and refused weak proof. I supplied the architecture, implementation, tests, "
+                "and the live evidence you just saw. Human judgment and A I execution made "
+                "Lineage Detective real."
+            ),
+        },
+    ]
+    SCRIPT_FILE.write_text(json.dumps(segments, indent=2), encoding="utf-8")
+
+    # Regenerate every take. A prior clip belongs to a prior timing contract.
+    # MP3 avoids the streaming WAV size sentinel emitted by the TTS endpoint,
+    # which otherwise makes strict decoders report a corrupt terminal packet.
     client = OpenAI()
     inputs: list[Path] = []
     measured: list[dict] = []
-    for segment in SEGMENTS:
-        wav = MEDIA / f"{segment['name']}.wav"
-        if not wav.is_file():
-            response = client.audio.speech.create(
-                model="gpt-4o-mini-tts",
-                voice="cedar",
-                input=segment["text"],
-                instructions=VOICE_INSTRUCTIONS,
-                response_format="wav",
-            )
-            response.write_to_file(wav)
-        clip_duration = duration(wav)
-        inputs.append(wav)
+    for segment in segments:
+        clip = MEDIA / f"{segment['name']}.mp3"
+        response = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice="cedar",
+            input=segment["text"],
+            instructions=VOICE_INSTRUCTIONS,
+            response_format="mp3",
+        )
+        response.write_to_file(clip)
+        clip_duration = _duration(clip)
+        inputs.append(clip)
         measured.append(
             {
                 "name": segment["name"],
-                "start": segment["start"],
-                "max": segment["max"],
+                "start": round(segment["start"], 3),
+                "max": round(segment["max"], 3),
                 "generated_seconds": round(clip_duration, 3),
                 "tempo": round(max(1.0, clip_duration / segment["max"]), 5),
             }
+        )
+    rushed = [item for item in measured if item["tempo"] > 1.35]
+    if rushed:
+        raise SystemExit(
+            "Narration would sound rushed; shorten or reschedule these takes: "
+            + ", ".join(f"{item['name']} ({item['tempo']}x)" for item in rushed)
         )
     (MEDIA / "narration-measurements.json").write_text(
         json.dumps(measured, indent=2), encoding="utf-8"
@@ -189,7 +213,7 @@ def main() -> None:
         command.extend(["-i", str(wav)])
 
     audio_chains: list[str] = []
-    for index, (segment, measurement) in enumerate(zip(SEGMENTS, measured), start=1):
+    for index, (segment, measurement) in enumerate(zip(segments, measured), start=1):
         tempo = measurement["tempo"]
         delay = int(round(segment["start"] * 1000))
         transform = f"atempo={tempo}" if tempo > 1.00001 else "anull"
@@ -197,31 +221,33 @@ def main() -> None:
             f"[{index}:a]{transform},aresample=48000,adelay={delay}|{delay}[a{index}]"
         )
     mix_inputs = "".join(f"[a{i}]" for i in range(1, len(inputs) + 1))
+    fade_start = max(0.2, raw_duration - 0.9)
     audio_chains.append(
         f"{mix_inputs}amix=inputs={len(inputs)}:duration=longest:dropout_transition=0,"
-        "loudnorm=I=-16:TP=-1.5:LRA=8,afade=t=in:st=0:d=0.18,"
-        "afade=t=out:st=144.55:d=0.75,atrim=0:145.35[aout]"
+        f"loudnorm=I=-16:TP=-1.5:LRA=8,afade=t=in:st=0:d=0.18,"
+        f"afade=t=out:st={fade_start:.3f}:d=0.75,atrim=0:{raw_duration:.3f}[aout]"
     )
 
     font = str(FONT).replace("\\", "/").replace(":", r"\:")
-    hook_one = escape_drawtext("BUILT BY CODEX  ×  DIRECTED BY BRYAN")
-    hook_two = escape_drawtext("LIVE DATAHUB INVESTIGATION → VERIFIED REPAIR")
-    close_one = escape_drawtext("HUMAN JUDGMENT  ×  AI EXECUTION")
-    close_two = escape_drawtext("Every claim earned by a receipt.")
+    hook_one = _escape_drawtext("BUILT BY CODEX  ×  DIRECTED BY BRYAN")
+    hook_two = _escape_drawtext("ONE APPROVAL → LIVE LINEAGE → VERIFIED REPAIR")
+    close_one = _escape_drawtext("HUMAN JUDGMENT  ×  AI EXECUTION")
+    close_two = _escape_drawtext("Every claim earned by a receipt.")
+    close_end = min(raw_duration - 0.2, handoff + 10.0)
     video_filter = (
         "[0:v]crop=1600:900:0:126,scale=1920:1080:flags=lanczos,"
-        "drawbox=x=80:y=820:w=980:h=150:color=0x07111f@0.88:t=fill:"
-        "enable='between(t,0,6.8)',"
+        "drawbox=x=80:y=820:w=1120:h=150:color=0x07111f@0.88:t=fill:"
+        "enable='between(t,0,7.2)',"
         f"drawtext=fontfile='{font}':text='{hook_one}':x=118:y=852:"
-        "fontsize=42:fontcolor=0x67e8f9:enable='between(t,0,6.8)',"
+        "fontsize=42:fontcolor=0x67e8f9:enable='between(t,0,7.2)',"
         f"drawtext=fontfile='{font}':text='{hook_two}':x=118:y=912:"
-        "fontsize=27:fontcolor=white:enable='between(t,0,6.8)',"
-        "drawbox=x=80:y=820:w=900:h=150:color=0x07111f@0.90:t=fill:"
-        "enable='between(t,131.8,142.5)',"
+        "fontsize=27:fontcolor=white:enable='between(t,0,7.2)',"
+        "drawbox=x=80:y=820:w=980:h=150:color=0x07111f@0.90:t=fill:"
+        f"enable='between(t,{handoff:.3f},{close_end:.3f})',"
         f"drawtext=fontfile='{font}':text='{close_one}':x=118:y=852:"
-        "fontsize=42:fontcolor=0x67e8f9:enable='between(t,131.8,142.5)',"
+        f"fontsize=42:fontcolor=0x67e8f9:enable='between(t,{handoff:.3f},{close_end:.3f})',"
         f"drawtext=fontfile='{font}':text='{close_two}':x=118:y=912:"
-        "fontsize=29:fontcolor=white:enable='between(t,131.8,142.5)',"
+        f"fontsize=29:fontcolor=white:enable='between(t,{handoff:.3f},{close_end:.3f})',"
         "format=yuv420p[vout]"
     )
     filter_complex = ";".join(audio_chains + [video_filter])
@@ -248,11 +274,11 @@ def main() -> None:
             "-movflags",
             "+faststart",
             "-t",
-            "145.35",
+            f"{raw_duration:.3f}",
             str(FINAL),
         ]
     )
-    run(*command)
+    subprocess.run(command, check=True)
     if not FINAL.is_file() or FINAL.stat().st_size < 5_000_000:
         raise SystemExit("The final judge video was not produced at release quality.")
     print(FINAL)

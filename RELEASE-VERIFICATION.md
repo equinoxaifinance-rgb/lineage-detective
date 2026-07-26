@@ -7,7 +7,7 @@ This is an execution log, not a promise about future external services.
 | Surface | Command / action | Observed result |
 |---|---|---|
 | Source syntax | `python -m compileall -q app.py src tests quickstart.py tools` | exit 0 |
-| Hermetic suite | `.venv\Scripts\python -m unittest discover -s tests -q` | 102 passed, 0 failed in 35.128 seconds |
+| Hermetic suite | `.venv\Scripts\python -m unittest discover -s tests -q` | 103 passed, 0 failed in 31.424 seconds |
 | Rollback fail-closed regression | successful assertion followed by forced rollback failure | receipt downgraded to `sandbox_failed`; apply and handoff both rejected it |
 | Concurrent-run isolation | eight simultaneous custom repair trials using the default template | eight distinct OS temporary workspaces; all eight verified, rolled back, and were removed |
 | Source-drift conflict | selected SQL changed after proposal generation | apply rejected the stale proposal before backup or write; later human bytes were preserved |
@@ -23,7 +23,7 @@ This is an execution log, not a promise about future external services.
 | Clean sidecar install | disposable Python 3.11 virtual environment + `pip install --require-hashes -r requirements-datahub-sidecar.lock` | installed from the lock, `pip check` passed, and `datahub` plus `mcp_server_datahub` imported successfully |
 | Judge-facing runtime | `.venv: pip check` and `python -m pip_audit --strict` | both exit 0; no known vulnerabilities reported |
 | Linux release image | `docker build --platform linux/amd64 -t lineage-detective:final .` | hash-locked image built; the first build exposed and fixed an unconditional Windows-only `pywin32` lock entry |
-| Packaged release execution | `lineage-detective:proof-current` on a no-cache Linux/amd64 container | image digest `sha256:436e8a565e1e683e228ef86bf4f850915819482c876f1cf34be3b37957af4127`; `pip check` passed; all 102 tests passed in 24.793 seconds; all 3 example cases verified |
+| Packaged release execution | `lineage-detective:proof-current` on a no-cache Linux/amd64 container | pre-video proof image digest `sha256:436e8a565e1e683e228ef86bf4f850915819482c876f1cf34be3b37957af4127`; `pip check` passed; all 102 then-current tests passed in 24.793 seconds; all 3 example cases verified. The post-video source adds one UI regression test and is rebuilt after this log is committed. |
 | Hosted Cloudflare release | `wrangler deploy`, `wrangler containers list`, independent HTTPS request | container application became active with 2 instances; the public URL returned HTTP 200 |
 | Hosted visible UI | fresh in-app browser load of `https://lineage-detective.equinoxaifinance.workers.dev` | title and Lineage Detective heading rendered; DataHub Cloud managed MCP was the default; tenant URL, scoped-token, judge-gateway, and investigation controls rendered |
 | Release secret scan | tracked and untracked text artifacts, checking recognizable Anthropic, AWS, and GitHub token forms | no matches found |
@@ -69,7 +69,7 @@ This is an execution log, not a promise about future external services.
 | Live uninterrupted one-click path | fresh local browser session, select safe-demo finish, press Start once, do not intervene | real DataHub investigation traced 4 entities; containment and 2 impact writes were read back; sandbox changed 0/8 failing assertions to 8/8 passing and confirmed rollback; exact bytes were applied; implementation receipt and verified handoff downloads rendered |
 | Autonomous exact-byte readback | independent filesystem inspection after the uninterrupted browser run | target `.lineage-detective-demo/models/stg_customers.sql` SHA-256 `b4e321e471bb5c46533ef60caa410b7e703f84230d6622b2804fbb9c6e54e4b5` matched the displayed proposal; exactly one backup existed with SHA-256 `3d6189e222bf7ad1892763fc7bde18a5e87ee8e368d90e4ff8587cb1838d6fe7` |
 | Manual-mode preservation | fresh browser state toggled `Pause for review at every stage` | the autonomous Start control was replaced by the manual investigation control; separate later-stage actions remained available; toggling back restored the one-shot path |
-| Judge video release artifact | superseded after the multi-incident write-path expansion | a new video must be recorded and reverified after the final product lock; the earlier media receipt is historical, not current release evidence |
+| Judge video release artifact | real Chrome/Streamlit run, event-timed narration, full decode, loudness scan, frame contact sheet, and independent transcription | 145.467 seconds; 1920x1080 H.264 + 48 kHz AAC; both streams decoded without error; -16.16 LUFS / -1.36 dB true peak; transcript preserved all load-bearing claims; SHA-256 `d64a8d3df76196cc20d91782e77b1bdbba72a75f46f16b7ec900df57e03adc39` |
 | Earlier scenario suite | `prove_scenarios.py` against local DataHub | 3/3: partial load, schema drift, and stale feed reached the expected action locus |
 | Earlier containment proof | `tools/prove_writeback.py` | root quarantine and 3 downstream impact tags independently read back through MCP |
 | Earlier repair proof | fresh Streamlit path + sandbox trial | proposal stayed approval-gated; approved isolated trial changed 0/8 to 8/8 and rollback was confirmed |

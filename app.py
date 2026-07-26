@@ -56,6 +56,7 @@ _WORKFLOW_RESULT_KEYS = (
     "apply_receipt",
     "restore_receipt",
     "autonomous_workflow_result",
+    "autonomous_workflow_error",
 )
 
 
@@ -1462,6 +1463,25 @@ else:
         "action → prepare the receipt-backed handoff."
     )
 
+autonomous_error = st.session_state.get("autonomous_workflow_error")
+if autonomous_error:
+    st.error(
+        "The autonomous workflow stopped before completion. "
+        f"{autonomous_error}"
+    )
+autonomous_result_status = st.session_state.get("autonomous_workflow_result") or {}
+if autonomous_result_status and not autonomous_result_status.get("verified"):
+    failed_receipt = st.session_state.get("repair_receipt") or {}
+    failed_reason = (
+        failed_receipt.get("error")
+        or autonomous_result_status.get("state")
+        or "The repair did not earn a verified receipt."
+    )
+    st.error(
+        "The autonomous workflow stopped before completion. "
+        f"{failed_reason}"
+    )
+
 run_autonomous_now = bool(
     not manual_mode
     and st.session_state.get("workflow_run_requested")
@@ -1600,7 +1620,9 @@ if manual_clicked or run_autonomous_now:
                 st.session_state.pop(key, None)
             st.info("The autonomous workflow was cancelled. No unverified downstream action was kept.")
         except Exception as exc:
-            st.error(f"Autonomous follow-through failed: {type(exc).__name__}: {exc}")
+            st.session_state["autonomous_workflow_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
         finally:
             st.session_state["workflow_run_requested"] = False
             st.session_state["workflow_running"] = False

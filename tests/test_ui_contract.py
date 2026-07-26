@@ -100,6 +100,23 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn("except WorkflowCancelled:", APP)
         self.assertIn('st.session_state["workflow_running"] = False', APP)
 
+    def test_autonomous_failures_survive_the_final_streamlit_rerun(self):
+        self.assertIn('"autonomous_workflow_error"', APP)
+        self.assertIn('autonomous_error = st.session_state.get("autonomous_workflow_error")', APP)
+        self.assertIn("if autonomous_error:", APP)
+        self.assertIn(
+            '"The autonomous workflow stopped before completion. "',
+            APP,
+        )
+        self.assertIn(
+            'autonomous_result_status and not autonomous_result_status.get("verified")',
+            APP,
+        )
+        self.assertIn(
+            'st.session_state["autonomous_workflow_error"] = (',
+            APP,
+        )
+
     def test_stationary_mascot_appears_inside_real_investigation_progress(self):
         self.assertIn('DROID_NAME = "Trace"', APP)
         self.assertIn("activity = st.empty()", APP)

@@ -15,7 +15,7 @@ This file separates implemented, tested, packaged, deployed, published, and subm
 - Optional GitHub, dbt Cloud, Airflow, Fivetran, Snowflake, DataHub assertion, and customer-command
   connectors with scoped credentials and secret-free receipts.
 - Hosted public-network policy and redirect rejection for credential-bearing requests.
-- 102/102 local tests and 102/102 tests from a clean Linux/amd64 image after the final redirect
+- 103/103 local tests and 103/103 tests from a clean Linux/amd64 image after the final redirect
   regression was added.
 - Three executed example cases with independently verified hashes and handoff ZIPs.
 - Local browser full run: four live lineage entities, containment plus two impact writes read back,
@@ -41,7 +41,20 @@ the image that it hashes.
 - Public GitHub synchronization and CI result.
 - Cloudflare deployment of the exact current source plus public header/UI/runtime checks.
 - Fresh authorized judge-gateway probe and encrypted-secret inventory.
-- Final under-three-minute live video and independent media QA.
+- Final video owner approval and external publication.
+
+## Green: final judge video artifact
+
+- 145.467 seconds, 1920x1080, 30 fps, H.264 video plus 48 kHz AAC audio.
+- The browser recording contains one uninterrupted real approval-to-repair workflow; its event
+  timeline reached live lineage, diagnosis, exact diff, sandbox receipt, autonomous completion,
+  and verified handoff.
+- Both streams decoded end to end with zero decoder errors. Integrated loudness measured
+  -16.16 LUFS with -1.36 dB true peak.
+- An independent speech-to-text pass recovered the intended technical claims, including
+  zero rows passing before and all eight rows passing after.
+- SHA-256:
+  `d64a8d3df76196cc20d91782e77b1bdbba72a75f46f16b7ec900df57e03adc39`
 
 ## Intentionally not started
 
