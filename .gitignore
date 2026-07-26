@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 .env
+judge-gateway/.wrangler/
 tmp-ui-smoke-*.log
 
 # video build artifacts
