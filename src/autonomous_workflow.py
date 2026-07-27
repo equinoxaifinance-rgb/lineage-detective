@@ -3,7 +3,7 @@
 The caller chooses the scope before execution.  This module does not invent a target,
 merge a pull request, or bypass verification: it runs the proposed change in the sandbox,
 requires a verified receipt, optionally applies those exact bytes to the selected target,
-and prepares the same human-readable handoff used by manual mode.
+optionally deploys and reads back the live result, and prepares the same human-readable handoff.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 try:
+    from .deployment_workflow import run_verified_deployment
     from .repair import (
         apply_verified_repair,
         build_handoff_packet,
@@ -18,6 +19,7 @@ try:
         verify_sandbox_receipt,
     )
 except ImportError:  # App adds src/ to sys.path and imports this module directly.
+    from deployment_workflow import run_verified_deployment
     from repair import (
         apply_verified_repair,
         build_handoff_packet,
@@ -35,8 +37,11 @@ def run_approved_workflow(
     sandbox_runner: Callable[..., dict[str, Any]] | None = None,
     handoff_builder: Callable[[dict[str, Any]], bytes] | None = None,
     applier: Callable[..., dict[str, Any]] | None = None,
+    deployment_profile: dict[str, Any] | None = None,
+    deployment_runner: Callable[..., dict[str, Any]] | None = None,
+    allow_local_deployment: bool = False,
 ) -> dict[str, Any]:
-    """Run sandbox -> optional exact-byte apply -> handoff under one explicit approval."""
+    """Run sandbox -> optional exact-byte apply -> optional verified deploy -> handoff."""
     if not approval or not approval.strip():
         raise ValueError("An explicit workflow approval is required")
     repair = report.get("repair") or {}
@@ -46,6 +51,7 @@ def run_approved_workflow(
             "verified": False,
             "repair_receipt": None,
             "apply_receipt": None,
+            "deployment_receipt": None,
             "handoff_packet": None,
         }
 
@@ -61,6 +67,7 @@ def run_approved_workflow(
             "verified": False,
             "repair_receipt": receipt,
             "apply_receipt": None,
+            "deployment_receipt": None,
             "handoff_packet": None,
             "error": receipt_reason,
         }
@@ -69,6 +76,7 @@ def run_approved_workflow(
     # the workflow stops with zero implementation side effects.
     handoff = make_handoff(receipt)
     apply_receipt = None
+    deployment_receipt = None
     if apply_target:
         apply_receipt = apply_repair(
             receipt,
@@ -81,6 +89,34 @@ def run_approved_workflow(
                 "verified": False,
                 "repair_receipt": receipt,
                 "apply_receipt": apply_receipt,
+                "deployment_receipt": None,
+                "handoff_packet": handoff,
+            }
+    if deployment_profile:
+        if not apply_receipt:
+            return {
+                "state": "deployment_requires_applied_repair",
+                "verified": False,
+                "repair_receipt": receipt,
+                "apply_receipt": None,
+                "deployment_receipt": None,
+                "handoff_packet": handoff,
+            }
+        deploy = deployment_runner or run_verified_deployment
+        deployment_receipt = deploy(
+            apply_receipt,
+            profile=deployment_profile,
+            approval=approval,
+            allow_local_execution=allow_local_deployment,
+            on_progress=on_progress,
+        )
+        if deployment_receipt.get("verified") is not True:
+            return {
+                "state": "deployment_not_verified",
+                "verified": False,
+                "repair_receipt": receipt,
+                "apply_receipt": apply_receipt,
+                "deployment_receipt": deployment_receipt,
                 "handoff_packet": handoff,
             }
 
@@ -89,5 +125,6 @@ def run_approved_workflow(
         "verified": True,
         "repair_receipt": receipt,
         "apply_receipt": apply_receipt,
+        "deployment_receipt": deployment_receipt,
         "handoff_packet": handoff,
     }

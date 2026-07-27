@@ -54,6 +54,7 @@ _WORKFLOW_RESULT_KEYS = (
     "repair_receipt",
     "handoff_packet",
     "apply_receipt",
+    "deployment_receipt",
     "restore_receipt",
     "autonomous_workflow_result",
     "autonomous_workflow_error",
@@ -488,17 +489,19 @@ def _render_external_remediation(repair: dict, receipt: dict, *, server_url: str
             "Each connector uses credentials only for this browser session. Nothing runs until its "
             "specific action button is clicked, and every result returns a downloadable receipt."
         )
+        connector_targets = (
+            "Open a GitHub pull request",
+            "Trigger a dbt Cloud job",
+            "Trigger an Airflow DAG",
+            "Pause, resume, or sync Fivetran",
+            "Execute one Snowflake statement",
+            "Create a DataHub prevention assertion",
+        )
+        if os.environ.get("HOSTED_MODE") != "1":
+            connector_targets = ("Run this repository's tests",) + connector_targets
         target = st.selectbox(
             "Implementation target",
-            (
-                "Run this repository's tests",
-                "Open a GitHub pull request",
-                "Trigger a dbt Cloud job",
-                "Trigger an Airflow DAG",
-                "Pause, resume, or sync Fivetran",
-                "Execute one Snowflake statement",
-                "Create a DataHub prevention assertion",
-            ),
+            connector_targets,
             key=f"connector-target-{repair_id}",
         )
         result = None
@@ -740,6 +743,7 @@ def _run_autonomous_followthrough(
     workflow_slot,
     *,
     finish_mode: str,
+    deployment_profile: dict | None = None,
 ) -> dict:
     """Complete the verified repair path after the user's single up-front approval."""
     _check_workflow_cancelled()
@@ -768,6 +772,15 @@ def _run_autonomous_followthrough(
                 f"The selected {artifact_label} is no longer an existing regular .sql file."
             )
         target_file = str(candidate.resolve(strict=True))
+    elif finish_mode == "Deploy verified repair + confirm live health":
+        candidate = Path(str(repair.get("source_path") or "")).expanduser()
+        if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.lower() != ".sql":
+            raise OSError(
+                f"The selected {artifact_label} is no longer an existing regular .sql file."
+            )
+        if not deployment_profile:
+            raise ValueError("Complete the self-hosted deployment profile before starting.")
+        target_file = str(candidate.resolve(strict=True))
 
     _render_detective(
         workflow_slot,
@@ -784,6 +797,8 @@ def _run_autonomous_followthrough(
         approval="one-click-ui-full-workflow",
         apply_target=target_file,
         on_progress=show_progress,
+        deployment_profile=deployment_profile,
+        allow_local_deployment=os.environ.get("HOSTED_MODE") != "1",
     )
     _check_workflow_cancelled()
     receipt = result.get("repair_receipt")
@@ -792,6 +807,9 @@ def _run_autonomous_followthrough(
     apply_receipt = result.get("apply_receipt")
     if apply_receipt is not None:
         st.session_state["apply_receipt"] = apply_receipt
+    deployment_receipt = result.get("deployment_receipt")
+    if deployment_receipt is not None:
+        st.session_state["deployment_receipt"] = deployment_receipt
     handoff = result.get("handoff_packet")
     if handoff is not None:
         st.session_state["handoff_packet"] = handoff
@@ -801,31 +819,39 @@ def _run_autonomous_followthrough(
             "state": result.get("state"),
             "verified": True,
             "finish_mode": finish_mode,
-            "repair_id": repair.get("repair_id"),
+                "repair_id": repair.get("repair_id"),
+                "deployed": bool(deployment_receipt and deployment_receipt.get("verified")),
         }
         _render_detective(
             workflow_slot,
             "complete",
             (
                 "Trace proved the exact change, verified rollback, completed the selected "
-                "implementation proof, and prepared the downloadable handoff."
+                "implementation path, confirmed any selected live deployment, and prepared "
+                "the downloadable handoff."
             ),
         )
         st.success(
-            "Autonomous run complete: evidence gathered, repair verified, selected finish action "
-            "confirmed, and handoff prepared."
+            "Autonomous run complete: evidence gathered, repair verified, the selected finish "
+            "action confirmed, and the handoff prepared."
         )
     else:
         st.session_state["autonomous_workflow_result"] = {
             "state": result.get("state"),
             "verified": False,
             "finish_mode": finish_mode,
-            "repair_id": repair.get("repair_id"),
+                "repair_id": repair.get("repair_id"),
+                "deployed": False,
         }
         _render_detective(
             workflow_slot,
             "error",
-            str((receipt or {}).get("error") or result.get("state") or "Verification failed."),
+            str(
+                (deployment_receipt or {}).get("error")
+                or (receipt or {}).get("error")
+                or result.get("state")
+                or "Verification failed."
+            ),
         )
         st.error(
             "The autonomous workflow stopped before implementation because verification did not pass."
@@ -1126,6 +1152,32 @@ def _render_repair(report: dict, detective_slot, workflow_slot) -> None:
                             st.error(restore_receipt.get("error") or "Backup restore was not verified.")
                 else:
                     st.error(apply_receipt.get("error") or f"The verified {change_noun} was not applied.")
+            deployment_receipt = st.session_state.get("deployment_receipt")
+            if deployment_receipt:
+                st.subheader("5 · Live deployment receipt")
+                if deployment_receipt.get("verified"):
+                    st.success(
+                        "The exact verified repair was deployed and a separate downstream health "
+                        "check confirmed the live result."
+                    )
+                elif deployment_receipt.get("rollback_verified"):
+                    st.warning(
+                        "The live health check did not pass. Trace restored the prior source, ran "
+                        "the rollback path, and independently verified the prior state."
+                    )
+                else:
+                    st.error(
+                        deployment_receipt.get("rollback_error")
+                        or deployment_receipt.get("error")
+                        or "Deployment and rollback were not fully verified."
+                    )
+                st.download_button(
+                    "Download deployment receipt",
+                    receipt_for_display(deployment_receipt),
+                    file_name="lineage-detective-deployment-receipt.json",
+                    mime="application/json",
+                    key=f"deployment-receipt-{repair.get('repair_id', 'current')}",
+                )
             handoff = st.session_state.get("handoff_packet")
             if handoff:
                 st.subheader("4 · Verified human handoff")
@@ -1159,8 +1211,9 @@ st.markdown(
     "dbt SQL file is available to this host, Trace can also draft a constrained patch; a proposed "
     "change runs in isolation first. Autonomous mode treats its clearly labeled start button as "
     "approval for the displayed full scope; manual mode pauses at each stage. After verification, "
-    "the hash-bound bytes can be applied locally or continued through a configured GitHub, dbt Cloud, "
-    "Airflow, Fivetran, Snowflake, or DataHub assertion connector.</div>",
+    "a self-hosted customer can run one approved path through exact write, deployment, independent "
+    "live readback, and automatic verified rollback. Individual GitHub, dbt Cloud, Airflow, "
+    "Fivetran, Snowflake, and DataHub assertion connectors remain available for governed actions.</div>",
     unsafe_allow_html=True)
 
 with st.sidebar:
@@ -1367,6 +1420,8 @@ elif model_available:
 else:
     manual_primary_label = "Investigate (evidence-only, read-only)"
 
+deployment_profile = None
+deployment_profile_ready = True
 with st.expander("Manual mode & advanced settings", expanded=False):
     manual_mode = st.checkbox(
         "Pause for review at every stage",
@@ -1380,15 +1435,114 @@ with st.expander("Manual mode & advanced settings", expanded=False):
     finish_options = ["Prove safe write + prepare handoff", "Prepare verified handoff only"]
     if repair_artifact:
         finish_options.append("Apply to selected SQL + prepare handoff")
+        if os.environ.get("HOSTED_MODE") != "1":
+            finish_options.append("Deploy verified repair + confirm live health")
     autonomous_finish_mode = st.selectbox(
         "After the sandbox passes",
         finish_options,
         key="autonomous_finish_mode",
         help=(
             "The safe-write option applies only to Lineage Detective's disposable demonstration "
-            "copy. A real selected SQL file is changed only when that explicit option is chosen."
+            "copy. A real selected SQL file is changed only when that explicit option is chosen. "
+            "Self-hosted deployment additionally runs the customer's deploy, live-check, rollback, "
+            "and rollback-check commands under the same approval."
         ),
     )
+    if autonomous_finish_mode == "Deploy verified repair + confirm live health":
+        st.info(
+            "For a customer running Lineage Detective inside their own environment: Trace will "
+            "write the exact verified file, deploy it, check the real service, and automatically "
+            "restore and verify the prior release if that check fails. Credentials stay in the "
+            "customer's existing environment or credential manager."
+        )
+        source_candidate = Path(str((repair_artifact or {}).get("path") or "")).expanduser()
+        default_root = os.environ.get(
+            "LINEAGE_DEPLOYMENT_ROOT",
+            str(source_candidate.parent if source_candidate.name else Path.cwd()),
+        )
+        try:
+            default_deployment_timeout = min(
+                max(int(os.environ.get("LINEAGE_DEPLOYMENT_TIMEOUT", "300")), 1),
+                1800,
+            )
+        except ValueError:
+            default_deployment_timeout = 300
+        deployment_name = st.text_input(
+            "Deployment name",
+            value=os.environ.get("LINEAGE_DEPLOYMENT_NAME", "Production data project"),
+            key="deployment_profile_name",
+        )
+        deployment_root = st.text_input(
+            "Project folder",
+            value=default_root,
+            key="deployment_profile_root",
+            help="The selected SQL file must be inside this customer-controlled project.",
+        )
+        deployment_command = st.text_input(
+            "Deploy command",
+            value=os.environ.get("LINEAGE_DEPLOY_COMMAND", ""),
+            key="deployment_profile_deploy",
+            placeholder="dbt build --select path.to.model",
+            help="Executed without a shell, so pipes and chained shell commands are not interpreted.",
+        )
+        verification_command = st.text_input(
+            "Live health-check command",
+            value=os.environ.get("LINEAGE_DEPLOY_VERIFY_COMMAND", ""),
+            key="deployment_profile_verify",
+            placeholder="python verify_production.py",
+            help="This must read the downstream result. A successful deploy response alone is not proof.",
+        )
+        rollback_command = st.text_input(
+            "Rollback command",
+            value=os.environ.get("LINEAGE_DEPLOY_ROLLBACK_COMMAND", ""),
+            key="deployment_profile_rollback",
+            placeholder="dbt build --select path.to.model",
+            help="Runs after Trace restores the exact prior source bytes.",
+        )
+        rollback_verification_command = st.text_input(
+            "Rollback health-check command",
+            value=os.environ.get("LINEAGE_DEPLOY_ROLLBACK_VERIFY_COMMAND", ""),
+            key="deployment_profile_rollback_verify",
+            placeholder="python verify_previous_release.py",
+            help="Confirms the prior state is healthy after an automatic rollback.",
+        )
+        deployment_timeout = st.number_input(
+            "Maximum seconds per deployment step",
+            min_value=1,
+            max_value=1800,
+            value=default_deployment_timeout,
+            step=30,
+            key="deployment_profile_timeout",
+        )
+        deployment_profile = {
+            "kind": "self_hosted_commands",
+            "name": deployment_name,
+            "cwd": deployment_root,
+            "deploy_command": deployment_command,
+            "verify_command": verification_command,
+            "rollback_command": rollback_command,
+            "rollback_verify_command": rollback_verification_command,
+            "timeout_seconds": float(deployment_timeout),
+        }
+        missing_profile_fields = [
+            label for label, value in (
+                ("project folder", deployment_root),
+                ("deploy command", deployment_command),
+                ("live health-check command", verification_command),
+                ("rollback command", rollback_command),
+                ("rollback health-check command", rollback_verification_command),
+            ) if not str(value).strip()
+        ]
+        if missing_profile_fields:
+            deployment_profile_ready = False
+            st.warning(
+                "Complete before running: " + ", ".join(missing_profile_fields) + "."
+            )
+        else:
+            st.success(
+                "Deployment profile complete. One approval now covers sandbox proof, exact write, "
+                "deployment, independent live readback, and verified rollback on failure."
+            )
     st.caption(
         "Connection, reasoning, containment, lineage depth, and external-provider controls remain "
         "available in the sidebar and verified-result sections."
@@ -1422,9 +1576,11 @@ else:
         type="primary",
         width="stretch",
         on_click=_queue_autonomous_workflow,
+        disabled=not deployment_profile_ready,
         help=(
             "One approval runs the complete evidence-to-verification path. It never merges a pull "
-            "request or invents credentials."
+            "request or invents credentials. Complete every required deployment-profile field "
+            "before a live deployment run."
         ),
     )
     st.caption(
@@ -1560,6 +1716,7 @@ if manual_clicked or run_autonomous_now:
                     st.session_state["report"],
                     workflow_status,
                     finish_mode=autonomous_finish_mode,
+                    deployment_profile=deployment_profile,
                 )
         except WorkflowCancelled:
             for key in _WORKFLOW_RESULT_KEYS:

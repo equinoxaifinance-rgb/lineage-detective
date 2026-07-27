@@ -294,6 +294,20 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn('"Row-count range"', APP)
         self.assertIn('"Custom SQL metric"', APP)
 
+    def test_self_hosted_one_click_deployment_requires_live_and_rollback_readback(self):
+        self.assertIn('"Deploy verified repair + confirm live health"', APP)
+        self.assertIn('"Live health-check command"', APP)
+        self.assertIn('"Rollback command"', APP)
+        self.assertIn('"Rollback health-check command"', APP)
+        self.assertIn('"LINEAGE_DEPLOY_COMMAND"', APP)
+        self.assertIn('"LINEAGE_DEPLOY_VERIFY_COMMAND"', APP)
+        self.assertIn('"LINEAGE_DEPLOY_ROLLBACK_COMMAND"', APP)
+        self.assertIn('"LINEAGE_DEPLOY_ROLLBACK_VERIFY_COMMAND"', APP)
+        self.assertIn("deployment_profile=deployment_profile", APP)
+        self.assertIn("disabled=not deployment_profile_ready", APP)
+        self.assertIn('os.environ.get("HOSTED_MODE") != "1"', APP)
+        self.assertIn('"Download deployment receipt"', APP)
+
     def test_datahub_cloud_managed_mcp_is_a_first_class_connection(self):
         self.assertIn('"DataHub Cloud managed MCP"', APP)
         self.assertIn("/integrations/ai/mcp/", APP)

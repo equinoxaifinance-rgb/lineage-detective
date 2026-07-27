@@ -108,6 +108,50 @@ class AutonomousWorkflowTests(unittest.TestCase):
                 approval="",
             )
 
+    def test_optional_deployment_is_part_of_the_same_approved_workflow(self):
+        calls = []
+
+        def deploy(apply_receipt, **kwargs):
+            calls.append((apply_receipt, kwargs))
+            return {"verified": True, "deployed": True, "state": "deployed_verified"}
+
+        result = run_approved_workflow(
+            {"repair": {"state": "approval_required", "repair_id": "repair-deploy"}},
+            approval="one-click-user-approval",
+            apply_target="C:/safe/demo.sql",
+            sandbox_runner=lambda *_args, **_kwargs: self._receipt("repair-deploy"),
+            applier=lambda *_args, **_kwargs: {"applied": True, "verified": True},
+            handoff_builder=lambda *_args, **_kwargs: b"packet",
+            deployment_profile={"kind": "test"},
+            deployment_runner=deploy,
+            allow_local_deployment=True,
+        )
+        self.assertTrue(result["verified"])
+        self.assertTrue(result["deployment_receipt"]["deployed"])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0][1]["allow_local_execution"])
+
+    def test_failed_deployment_keeps_earlier_receipts_but_blocks_completion(self):
+        result = run_approved_workflow(
+            {"repair": {"state": "approval_required", "repair_id": "repair-deploy-fail"}},
+            approval="one-click-user-approval",
+            apply_target="C:/safe/demo.sql",
+            sandbox_runner=lambda *_args, **_kwargs: self._receipt("repair-deploy-fail"),
+            applier=lambda *_args, **_kwargs: {"applied": True, "verified": True},
+            handoff_builder=lambda *_args, **_kwargs: b"packet",
+            deployment_profile={"kind": "test"},
+            deployment_runner=lambda *_args, **_kwargs: {
+                "verified": False,
+                "rollback_verified": True,
+            },
+            allow_local_deployment=True,
+        )
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["state"], "deployment_not_verified")
+        self.assertIsNotNone(result["repair_receipt"])
+        self.assertIsNotNone(result["apply_receipt"])
+        self.assertIsNotNone(result["handoff_packet"])
+
 
 if __name__ == "__main__":
     unittest.main()

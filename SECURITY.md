@@ -55,3 +55,17 @@ Keep `ANTHROPIC_API_KEY` and any `DATAHUB_GMS_TOKEN` only in local environment
 variables or an ignored `.env`. Never commit them. A hosted DataHub tenant uses
 its own scoped token; the public `demo.datahubproject.io` instance is not a
 supported backend for this project.
+
+## Self-hosted deployment commands
+
+The public hosted app does not expose arbitrary local commands. A customer-controlled self-hosted
+process may configure deployment commands after selecting an existing repair target inside the
+same project root. Commands use `shell=False`, are individually time-bounded, and inherit
+credentials from the customer's existing environment; credentials are not saved in a deployment
+profile or receipt. Command text and output are represented by SHA-256 fingerprints in the final
+receipt rather than copied verbatim.
+
+The deploy command's exit code is not considered live proof. A separate health-check command must
+read the downstream result. On deploy or health-check failure, Lineage Detective restores the exact
+hash-verified backup, runs the configured rollback command, and runs a distinct rollback-health
+check. An unverified rollback remains a red terminal state.

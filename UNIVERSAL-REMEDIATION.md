@@ -16,10 +16,13 @@ extensible adapter contract; it does not mean one credential can safely control 
 | Snowflake | Execute exactly one reviewed SQL statement with a unique request ID | Read successful statement handle |
 | DataHub Cloud | Create an active freshness, row-count, or custom-SQL assertion | Read assertion URN from the GraphQL mutation |
 | Any local project | Run an explicit customer test command without a command shell | Exit code, bounded output, SHA-256 |
+| Self-hosted deployment profile | Exact write, customer deploy command, live check, automatic source restore and rollback command | Separate live-health and rollback-health commands plus a secret-free SHA-256 receipt |
 
 Every connector credential is accepted only in the active UI session and omitted from receipts.
-Every action has its own explicit button. A DataHub containment tag never silently becomes a source
-system mutation.
+Individual connector actions have explicit buttons. The self-hosted deployment profile is the one
+exception by design: the human selects its full scope first, then one clearly labeled approval runs
+sandbox proof, exact write, deploy, live readback, and automatic verified rollback. A DataHub
+containment tag never silently becomes a source-system mutation.
 
 The hosted release rejects URLs that resolve to loopback, link-local, reserved, or private network
 addresses so connector fields cannot be abused as an SSRF route. A local installation may
@@ -34,6 +37,10 @@ infrastructure.
 - Fivetran: scoped API key/secret able to manage the selected connection.
 - Snowflake: OAuth, key-pair JWT, or programmatic access token with the role required by the exact SQL.
 - DataHub assertions: DataHub Cloud token with **Edit Assertions** and **Edit Monitors**.
+- Self-hosted deployment: the target project and its selected SQL must be present on the host.
+  Provider credentials remain in that customer's existing environment or credential manager. The
+  customer defines deploy, live-health, rollback, and rollback-health commands once. A self-hosted
+  instance can preload them through the documented `LINEAGE_DEPLOY_*` environment variables.
 
 ## Deliberate boundaries
 
@@ -43,6 +50,12 @@ infrastructure.
 - Snowflake accepts one reviewed statement, attaches an idempotency request ID, and never defaults a
   warehouse repair from a dbt model’s `SELECT`.
 - Local validation runs without a shell, with a time limit and captured receipt.
+- Self-hosted deployment commands also run without a shell and are hidden in receipts behind hashes.
+  The public hosted app does not expose either arbitrary local validation or arbitrary deployment
+  commands.
+- Deployment is not called verified when only the deploy command exits successfully. The separate
+  downstream health check must pass. Any failure enters rollback; a failed rollback readback remains
+  red rather than being softened into success.
 - A returned target-system ID is not called a successful data repair unless the target also exposes
   a state that can be read back.
 
@@ -56,8 +69,9 @@ An adapter qualifies only when it provides:
 4. a secret-free, SHA-256-bound receipt;
 5. failure behavior that cannot be mistaken for success.
 
-The connector implementations live in `src/remediation_connectors.py`; hermetic protocol tests live
-in `tests/test_remediation_connectors.py`.
+The connector implementations live in `src/remediation_connectors.py`; the transactional deployment
+controller lives in `src/deployment_workflow.py`. Hermetic protocol and real subprocess tests live in
+`tests/test_remediation_connectors.py` and `tests/test_deployment_workflow.py`.
 
 ## Validation levels
 

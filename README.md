@@ -293,8 +293,19 @@ I built the agent to separate evidence, action, and claim: DataHub facts are gat
 containment writes are read back before they are announced; and a suggested repair remains a proposal
 until a human explicitly runs its isolated sandbox trial. A sandbox pass is not presented as a
 production guarantee. After it passes, the human can apply those exact verified bytes to a selected
-checked-out model with a backup and hash readback, or export the handoff. The reproduction commands
-above are the receipts, not a substitute for running them.
+checked-out model with a backup and hash readback, export the handoff, or—in a customer-controlled
+self-hosted process—continue through deployment and a separate live health check. That deployment
+path automatically restores the source, runs the customer's rollback command, and verifies the
+prior state if live proof fails. The customer still supplies the unavoidable destination,
+credentials through their own environment, and the four environment-specific commands. The
+reproduction commands above are the receipts, not a substitute for running them.
+
+Self-hosted teams can preconfigure that profile once with
+`LINEAGE_DEPLOYMENT_ROOT`, `LINEAGE_DEPLOY_COMMAND`, `LINEAGE_DEPLOY_VERIFY_COMMAND`,
+`LINEAGE_DEPLOY_ROLLBACK_COMMAND`, and `LINEAGE_DEPLOY_ROLLBACK_VERIFY_COMMAND` (plus optional
+`LINEAGE_DEPLOYMENT_NAME` / `LINEAGE_DEPLOYMENT_TIMEOUT`). These variables contain routing and
+commands, not provider secrets; provider credentials stay in the customer's existing secret store
+or process environment.
 
 An agent, that built an agent — for an agent hackathon.
 
