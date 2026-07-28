@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -59,6 +60,7 @@ DROID_NAME = "Trace"
 DEFAULT_JUDGE_ENDPOINT = "https://lineage-detective-judge-gateway.equinoxaifinance.workers.dev"
 _VOCAB_READY_SUCCESSES: set[tuple[str, str]] = set()
 _HOSTED_CATALOG_READY_SUCCESSES: set[str] = set()
+_HOSTED_CATALOG_PREFLIGHT_LOCK = threading.Lock()
 _WORKFLOW_RESULT_KEYS = (
     "report",
     "repair_receipt",
@@ -113,8 +115,31 @@ def _hosted_catalog_preflight(
     fingerprint = hashlib.sha256(
         f"{server_url}\0{mcp_url}\0{token}\0{default_urn}".encode("utf-8")
     ).hexdigest()
-    if fingerprint in _HOSTED_CATALOG_READY_SUCCESSES:
-        return True, None
+    # Streamlit may overlap the landing-page and invitation-page sessions.
+    # Both sessions target the same reversible probe asset, so serialize the
+    # add/read/remove/read proof. Without this lock, one session can remove the
+    # marker while the other is still proving its add.
+    with _HOSTED_CATALOG_PREFLIGHT_LOCK:
+        if fingerprint in _HOSTED_CATALOG_READY_SUCCESSES:
+            return True, None
+        return _run_hosted_catalog_preflight(
+            server_url=server_url,
+            mcp_url=mcp_url,
+            token=token,
+            default_urn=default_urn,
+            fingerprint=fingerprint,
+        )
+
+
+def _run_hosted_catalog_preflight(
+    *,
+    server_url: str,
+    mcp_url: str,
+    token: str,
+    default_urn: str,
+    fingerprint: str,
+) -> tuple[bool, str | None]:
+    """Execute one serialized hosted-catalog proof."""
     required_tools = {
         "search",
         "get_lineage",
@@ -155,8 +180,10 @@ def _hosted_catalog_preflight(
                 # Cleanup is attempted even if add/readback raises, so a
                 # preflight cannot leave its reversible marker behind.
                 remove_readback = catalog.remove_tag(probe_urn, probe_tag)
-            if not (add_readback and remove_readback):
-                return False, "The reversible DataHub mutation proof did not round-trip."
+            if not add_readback:
+                return False, "The reversible DataHub add-tag readback did not round-trip."
+            if not remove_readback:
+                return False, "The reversible DataHub remove-tag readback did not round-trip."
             missing = required_tools - catalog.tools
             if missing:
                 return False, (

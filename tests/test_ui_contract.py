@@ -167,6 +167,9 @@ class JudgeUiContractTests(unittest.TestCase):
             "judge_lane_available = SELF_HOSTED_MODE or catalog_preflight_ready",
             APP,
         )
+        self.assertIn("_HOSTED_CATALOG_PREFLIGHT_LOCK = threading.Lock()", APP)
+        self.assertIn("with _HOSTED_CATALOG_PREFLIGHT_LOCK:", APP)
+        self.assertIn("def _run_hosted_catalog_preflight(", APP)
         self.assertIn(
             "if hosted_gateway and not judge_lane_available:",
             APP,
