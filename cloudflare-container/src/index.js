@@ -1,6 +1,8 @@
 import { Container } from "@cloudflare/containers";
 import { env } from "cloudflare:workers";
 
+const JUDGE_WARMTH_END = Date.parse("2026-09-16T00:00:00Z");
+
 export class LineageDetectiveContainer extends Container {
   defaultPort = 8501;
   // A real DataHub Core bootstrap is intentionally heavier than a static demo.
@@ -69,6 +71,31 @@ export class LineageDetectiveContainer extends Container {
 }
 
 export default {
+  async scheduled(controller, env) {
+    if (controller.scheduledTime > JUDGE_WARMTH_END) {
+      console.log("Lineage Detective judge warmth window ended", {
+        scheduledTime: controller.scheduledTime,
+      });
+      return;
+    }
+    const container = env.LINEAGE_DETECTIVE.getByName("judge");
+    const response = await container.fetch(
+      new Request("http://lineage-detective.internal/_stcore/health", {
+        headers: { "User-Agent": "lineage-detective-judge-warmth" },
+      }),
+    );
+    const body = await response.text();
+    if (!response.ok || body.trim() !== "ok") {
+      throw new Error(
+        `Scheduled judge-container health check failed: ${response.status}`,
+      );
+    }
+    console.log("Lineage Detective judge container is warm", {
+      scheduledTime: controller.scheduledTime,
+      status: response.status,
+    });
+  },
+
   async fetch(request, env) {
     const container = env.LINEAGE_DETECTIVE.getByName("judge");
     const requestUrl = new URL(request.url);

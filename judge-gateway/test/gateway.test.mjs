@@ -145,7 +145,22 @@ test("valid access consumes one budget unit and returns only provider text", asy
   globalThis.fetch = async (url, init) => {
     assert.equal(url, "https://api.anthropic.com/v1/messages");
     assert.equal(init.headers["x-api-key"], "test-provider-key");
-    return Response.json({ content: [{ type: "text", text: "GATEWAY_OK" }] });
+    const providerBody = JSON.parse(init.body);
+    assert.equal(providerBody.output_config.format.type, "json_schema");
+    assert.equal(providerBody.output_config.format.schema.additionalProperties, false);
+    assert.deepEqual(
+      providerBody.output_config.format.schema.required,
+      ["summary", "suspects", "missing_evidence"],
+    );
+    const report = JSON.stringify({
+      summary: "Grounded report.",
+      suspects: [],
+      missing_evidence: null,
+    });
+    return Response.json({
+      content: [{ type: "text", text: report }],
+      stop_reason: "end_turn",
+    });
   };
   try {
     const response = await worker.fetch(
@@ -160,7 +175,38 @@ test("valid access consumes one budget unit and returns only provider text", asy
       env,
     );
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { text: "GATEWAY_OK" });
+    const body = await response.json();
+    assert.equal(JSON.parse(body.text).summary, "Grounded report.");
+    assert.deepEqual(calls, { rate: 2, budget: 1 });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("invalid provider output fails closed after one budget unit", async () => {
+  const { env, calls } = environment();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    content: [{ type: "text", text: "not-json" }],
+    stop_reason: "max_tokens",
+  });
+  try {
+    const response = await worker.fetch(
+      new Request("https://gateway.test/reason", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-lineage-judge-code": "test-judge-code",
+        },
+        body: JSON.stringify({ system: "Return JSON.", user: "Diagnose." }),
+      }),
+      env,
+    );
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), {
+      error: "invalid_structured_reasoning_response",
+      retryable: true,
+    });
     assert.deepEqual(calls, { rate: 2, budget: 1 });
   } finally {
     globalThis.fetch = realFetch;

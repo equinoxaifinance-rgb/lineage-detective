@@ -106,6 +106,17 @@ class CloudflareContainerContractTests(unittest.TestCase):
 
     def test_judge_runtime_stays_warm_for_a_workday_then_scales_to_zero(self):
         self.assertIn('sleepAfter = "8h"', WORKER)
+        self.assertEqual(WRANGLER["triggers"]["crons"], ["0 * * * *"])
+        self.assertIn("async scheduled(controller, env)", WORKER)
+        self.assertIn(
+            'Date.parse("2026-09-16T00:00:00Z")',
+            WORKER,
+        )
+        self.assertIn(
+            'new Request("http://lineage-detective.internal/_stcore/health"',
+            WORKER,
+        )
+        self.assertIn('body.trim() !== "ok"', WORKER)
 
     def test_worker_adds_browser_security_headers(self):
         for header in (

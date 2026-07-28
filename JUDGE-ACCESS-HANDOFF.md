@@ -68,7 +68,7 @@ The invitation code used during testing was intentionally temporary and is now
 rejected by the gateway. The final code was generated after the last browser
 test, installed as an encrypted Cloudflare secret, authenticated through the
 live `/preflight` endpoint, and stored in the encrypted local owner handoff.
-Only its SHA-256 is present in the rotation receipt. During release
-synchronization, it is placed only in Devpost's judge-only Project URL. The
-public gallery URL remains secret-free. See [LIVE-STATUS.md](LIVE-STATUS.md)
-for the current release stage.
+Only its SHA-256 is present in the rotation receipt. The invitation is present
+only in Devpost's judge-only Project URL; the public gallery URL remains
+secret-free. See [LIVE-STATUS.md](LIVE-STATUS.md) for the current release
+stage.

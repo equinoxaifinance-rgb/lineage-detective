@@ -109,7 +109,7 @@ tests, interface, evidence system, and submission materials. Neither side did
 the other's job: the product exists because human judgment and AI execution
 kept correcting one another until the claims matched the work.
 
-## Links — fill only after verified
+## Verified links
 
 - Live app: `https://lineage-detective.equinoxaifinance.workers.dev`
 - Public repository: `https://github.com/equinoxaifinance-rgb/lineage-detective`

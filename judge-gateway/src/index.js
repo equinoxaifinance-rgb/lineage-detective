@@ -13,6 +13,30 @@ const MAX_OUTPUT_TOKENS = 1_500;
 const MODEL = "claude-sonnet-5";
 const DEFAULT_DAILY_REQUEST_CAP = 200;
 const DEFAULT_ACCESS_EXPIRES = "2026-09-15T23:59:59Z";
+const REPORT_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    suspects: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          urn: { type: "string" },
+          why: { type: "string" },
+          check_next: { type: "string" },
+          owner: { type: ["string", "null"] },
+          confidence: { type: "string", enum: ["high", "medium", "low"] },
+        },
+        required: ["urn", "why", "check_next", "owner", "confidence"],
+        additionalProperties: false,
+      },
+    },
+    missing_evidence: { type: ["string", "null"] },
+  },
+  required: ["summary", "suspects", "missing_evidence"],
+  additionalProperties: false,
+};
 
 function cors() {
   // A judge runs the app locally, so the origin is not known in advance. The access code,
@@ -169,6 +193,12 @@ export default {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: MAX_OUTPUT_TOKENS,
+        output_config: {
+          format: {
+            type: "json_schema",
+            schema: REPORT_SCHEMA,
+          },
+        },
         ...(typeof body.system === "string" && body.system ? { system: body.system } : {}),
         messages: [{ role: "user", content: body.user }],
       }),
@@ -179,6 +209,14 @@ export default {
     const answer = await upstream.json();
     const text = (answer.content || []).filter((part) => part.type === "text").map((part) => part.text).join("").trim();
     if (!text) return reply(502, { error: "empty_reasoning_response", retryable: true });
+    try {
+      JSON.parse(text);
+    } catch {
+      return reply(502, {
+        error: "invalid_structured_reasoning_response",
+        retryable: answer.stop_reason === "max_tokens",
+      });
+    }
     return reply(200, { text });
   },
 };

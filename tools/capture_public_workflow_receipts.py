@@ -70,6 +70,15 @@ def download(page, button_name: str, destination: Path) -> None:
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
+    for artifact in (
+        SANDBOX,
+        IMPLEMENTATION,
+        HANDOFF,
+        RESULT,
+        DIAGNOSTIC,
+        DIAGNOSTIC_SCREENSHOT,
+    ):
+        artifact.unlink(missing_ok=True)
     code = judge_code()
     console_errors: list[str] = []
 
@@ -119,6 +128,31 @@ def main() -> None:
             ).wait_for(state="visible", timeout=30_000)
             if "judge=" in page.url:
                 raise RuntimeError("Private invitation remained in the browser address bar.")
+            run_button = page.get_by_role(
+                "button", name="Approve & run full verified workflow", exact=True
+            )
+            try:
+                run_button.wait_for(state="visible", timeout=30_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const buttons = [...document.querySelectorAll("button")];
+                      const run = buttons.find(
+                        (button) => button.textContent.trim() ===
+                          "Approve & run full verified workflow"
+                      );
+                      return Boolean(run && !run.disabled);
+                    }
+                    """,
+                    timeout=90_000,
+                )
+            except Exception:
+                body_text = page.locator("body").inner_text(timeout=15_000)
+                DIAGNOSTIC.write_text(body_text, encoding="utf-8")
+                page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
+                raise RuntimeError(
+                    "Public workflow did not unlock after the private invitation."
+                )
 
             slider = (
                 page.locator('[data-testid="stSlider"]')
@@ -131,9 +165,7 @@ def main() -> None:
             if slider.input_value() != "6":
                 raise RuntimeError("Judge workflow did not select six hops.")
 
-            page.get_by_role(
-                "button", name="Approve & run full verified workflow", exact=True
-            ).click()
+            run_button.click()
             progress = page.locator('[aria-label="Verified workflow progress"]')
             deadline = time.monotonic() + 420
             body_text = ""
