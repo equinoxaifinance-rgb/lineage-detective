@@ -190,6 +190,26 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+
+def _consume_private_judge_invitation() -> None:
+    """Convert a judge-only invitation URL into session access, then clean the URL."""
+    if not PUBLIC_JUDGE_MODE:
+        return
+    invitation = str(st.query_params.get("judge") or "").strip()
+    if not invitation:
+        return
+    if len(invitation) > 256:
+        st.session_state["judge_invitation_error"] = (
+            "The private judge invitation was malformed. Use the Project URL from Devpost."
+        )
+    else:
+        st.session_state["judge_access_input"] = invitation
+        st.session_state["judge_access_autoverify"] = True
+    st.query_params.clear()
+
+
+_consume_private_judge_invitation()
+
 _CONF = {"high": ("#7f1d1d", "#fca5a5", "HIGH"),
          "medium": ("#78350f", "#fcd34d", "MEDIUM"),
          "low": ("#374151", "#d1d5db", "LOW")}
@@ -267,6 +287,7 @@ def _title_html() -> str:
       .ld-title-orbit{{position:absolute;width:70px;height:70px;border:1px solid #22d3ee55;border-radius:50%;animation:ld-scan 2.6s ease-out infinite}}
       .ld-title-spark{{position:absolute;right:8px;top:18px;width:7px;height:7px;border-radius:50%;background:#fbbf24;box-shadow:0 0 12px #fbbf24;animation:ld-lens 2.2s ease-in-out infinite}}
       .ld-fallback{{width:68px;height:68px;border-radius:50%;display:grid;place-items:center;background:#0f2847;border:2px solid #22d3ee;color:#fbbf24;font-weight:900}}
+      [data-testid="stElementContainer"][data-stale="true"]{{opacity:1!important;transition:none!important}}
       div.stButton>button[kind="primary"]{{background:linear-gradient(110deg,#0891b2,#2563eb)!important;border:1px solid #67e8f9!important;color:#f8fafc!important;border-radius:10px!important;font-weight:750!important;box-shadow:0 7px 18px #082f4966}}
       div.stButton>button[kind="primary"]:hover{{border-color:#fbbf24!important;color:#fff!important;box-shadow:0 9px 22px #0e749080}}
       @media(max-width:560px){{.ld-title-shell{{gap:8px}}.ld-title-visual{{width:82px;height:74px;flex-basis:82px}}.ld-title-mascot{{width:84px;height:84px}}.ld-title-copy p{{font-size:.85rem}}}}
@@ -418,8 +439,16 @@ def _select_search_result() -> None:
             st.session_state.pop(key, None)
 
 
-def _queue_autonomous_workflow() -> None:
+def _queue_autonomous_workflow(ready: bool = False) -> None:
     """Turn the start control into a cancel control on the next Streamlit rerun."""
+    if not ready:
+        st.session_state["workflow_run_requested"] = False
+        st.session_state["workflow_running"] = False
+        st.session_state["workflow_launch_blocked"] = (
+            "Verify judge access and confirm the live catalog before starting."
+        )
+        return
+    st.session_state.pop("workflow_launch_blocked", None)
     st.session_state["workflow_cancel_requested"] = False
     st.session_state["workflow_running"] = False
     st.session_state["workflow_run_requested"] = True
@@ -1467,6 +1496,9 @@ with st.sidebar:
     judge_endpoint_default = os.environ.get("LINEAGE_REASONING_ENDPOINT", DEFAULT_JUDGE_ENDPOINT)
     hosted_gateway = PUBLIC_JUDGE_MODE
     judge_lane_available = SELF_HOSTED_MODE or catalog_preflight_ready
+    verify_judge_clicked = bool(
+        st.session_state.pop("judge_access_autoverify", False)
+    )
     if hosted_gateway and not judge_lane_available:
         judge_endpoint = judge_endpoint_default
         judge_code = ""
@@ -1475,25 +1507,52 @@ with st.sidebar:
             "The access code cannot unlock the workflow until that backend passes preflight."
         )
     else:
-        judge_endpoint = st.text_input(
-            "Judge model gateway URL" if hosted_gateway else "Judge model gateway URL (optional)",
-            value=judge_endpoint_default,
-            placeholder="https://lineage-detective-judge-gateway.<account>.workers.dev",
-            help="This is a server-side relay. It does not reveal or store the provider API key in this app.",
-            disabled=hosted_gateway,
-        ).strip()
+        if hosted_gateway:
+            judge_endpoint = judge_endpoint_default
+            st.caption("Secure judge AI relay configured server-side.")
+        else:
+            judge_endpoint = st.text_input(
+                "Judge model gateway URL (optional)",
+                value=judge_endpoint_default,
+                placeholder="https://lineage-detective-judge-gateway.<account>.workers.dev",
+                help="This is a server-side relay. It does not reveal or store the provider API key in this app.",
+            ).strip()
         judge_code = st.text_input(
             "Judge access code (from testing instructions)" if hosted_gateway else "Judge access code (optional)",
             type="password",
+            key="judge_access_input",
             help="Provided with the judge instructions. It authorizes the bounded server-side model relay; it is not a provider API key.",
         ).strip()
+        if hosted_gateway:
+            verify_judge_clicked = bool(
+                verify_judge_clicked
+                or st.button(
+                    "Verify judge access",
+                    disabled=not bool(judge_code),
+                    help="Enter the supplied code, then click here. A successful server-side check unlocks model-backed investigation and repair.",
+                    width="stretch",
+                )
+            )
+    invitation_error = st.session_state.pop("judge_invitation_error", None)
+    if invitation_error:
+        st.error(invitation_error)
     gateway_model = bool(judge_lane_available and judge_endpoint and judge_code)
     gateway_ready = False
     if gateway_model:
         gateway_fingerprint = hashlib.sha256(
             f"{judge_endpoint}\0{judge_code}".encode("utf-8")
         ).hexdigest()
-        if st.session_state.get("judge_gateway_fingerprint") != gateway_fingerprint:
+        verified_fingerprint = st.session_state.get("judge_gateway_verified_fingerprint")
+        attempted_fingerprint = st.session_state.get("judge_gateway_attempt_fingerprint")
+        should_verify_gateway = bool(not hosted_gateway or verify_judge_clicked)
+        if (
+            should_verify_gateway
+            and (
+                verified_fingerprint != gateway_fingerprint
+                or attempted_fingerprint != gateway_fingerprint
+            )
+        ):
+            st.session_state["judge_gateway_attempt_fingerprint"] = gateway_fingerprint
             try:
                 st.session_state["judge_gateway_preflight"] = preflight_judge_gateway(
                     judge_endpoint,
@@ -1501,15 +1560,19 @@ with st.sidebar:
                     hosted_mode=hosted_gateway,
                 )
                 st.session_state["judge_gateway_preflight_error"] = None
+                if (st.session_state["judge_gateway_preflight"] or {}).get("ready"):
+                    st.session_state["judge_gateway_verified_fingerprint"] = gateway_fingerprint
             except Exception as exc:
                 st.session_state["judge_gateway_preflight"] = None
                 st.session_state["judge_gateway_preflight_error"] = type(exc).__name__
-            st.session_state["judge_gateway_fingerprint"] = gateway_fingerprint
         gateway_ready = bool(
+            st.session_state.get("judge_gateway_verified_fingerprint") == gateway_fingerprint
+            and
             (st.session_state.get("judge_gateway_preflight") or {}).get("ready")
         )
     else:
-        st.session_state.pop("judge_gateway_fingerprint", None)
+        st.session_state.pop("judge_gateway_verified_fingerprint", None)
+        st.session_state.pop("judge_gateway_attempt_fingerprint", None)
         st.session_state.pop("judge_gateway_preflight", None)
         st.session_state.pop("judge_gateway_preflight_error", None)
     model_available = local_model_key or gateway_ready
@@ -1521,20 +1584,40 @@ with st.sidebar:
             "Model-backed judge gateway verified. The provider key remains server-side. "
             f"Access window: {preflight.get('access_expires')}."
         )
-    elif gateway_model:
+    elif (
+        gateway_model
+        and st.session_state.get("judge_gateway_attempt_fingerprint") == gateway_fingerprint
+    ):
         st.error(
             "Judge access was entered but did not pass the server-side preflight. "
             "Check the code and retry."
         )
+    elif gateway_model:
+        st.info("Judge code entered. Click **Verify judge access** to unlock the full workflow.")
     elif judge_lane_available:
         st.info(
             "Evidence-only mode: real DataHub MCP evidence + deterministic checks. The bounded "
             "judge gateway URL is preloaded; enter the supplied judge access code for full "
             "model-backed reasoning and repair."
         )
-    contain = st.checkbox("Contain the confirmed incident in DataHub", value=model_available,
-                          disabled=not model_available,
-                          help="Model-backed default: writes quarantine/impact tags through MCP and reads them back to confirm. You may uncheck it for a read-only model-backed investigation. Evidence-only judge mode is always read-only.")
+    contain = model_available
+    with st.expander("Advanced catalog controls", expanded=False):
+        read_only_investigation = st.checkbox(
+            "Read-only investigation (do not write incident warning tags)",
+            value=False,
+            disabled=not model_available,
+            help=(
+                "The normal workflow marks the confirmed source QUARANTINE_INCIDENT and affected "
+                "downstream assets IMPACTED_BY_INCIDENT, then reads the tags back. Enable this "
+                "option to investigate without changing DataHub metadata."
+            ),
+        )
+        contain = bool(model_available and not read_only_investigation)
+        st.caption(
+            "Normal mode writes and verifies warning tags only after the cause is confirmed. "
+            "Read-only mode changes no DataHub metadata. Neither mode deletes data, stops "
+            "pipelines, or changes production code."
+        )
     if PUBLIC_JUDGE_MODE and catalog_preflight_ready:
         st.caption(
             "The scoped catalog credential stays server-side and is never sent to your browser."
@@ -1567,7 +1650,10 @@ example = st.selectbox(
 if example == CUSTOM_INCIDENT:
     st.info(
         "Custom mode is live, not a canned scenario: search this connected DataHub, choose an asset, "
-        "describe the symptom, and optionally attach the checked-out dbt SQL file that may need repair."
+        "describe the symptom, and optionally attach the checked-out dbt SQL file that may need repair. "
+        "This shared judge site uses the contest tenant and never requests customer credentials. "
+        "To investigate a private DataHub, run the public repository in self-hosted mode so its "
+        "URL and scoped credentials remain inside your own environment."
     )
 elif example == REPAIR_EXAMPLE:
     st.success("Full path selected: investigate → evidence-bound rewrite → explicit approval → real sandbox test → apply or hand off.")
@@ -1835,6 +1921,20 @@ with st.expander("Manual mode & advanced settings", expanded=False):
         "available in the sidebar and verified-result sections."
     )
 
+full_workflow_ready = bool(
+    deployment_profile_ready
+    and catalog_preflight_ready
+    and model_available
+)
+if (
+    st.session_state.get("workflow_run_requested")
+    and not st.session_state.get("workflow_running")
+    and not full_workflow_ready
+):
+    st.session_state["workflow_run_requested"] = False
+    st.session_state["workflow_launch_blocked"] = (
+        "The run was not started because judge access or the live catalog was not verified."
+    )
 workflow_active = bool(
     st.session_state.get("workflow_run_requested")
     or st.session_state.get("workflow_running")
@@ -1863,17 +1963,28 @@ else:
         type="primary",
         width="stretch",
         on_click=_queue_autonomous_workflow,
-        disabled=not (deployment_profile_ready and catalog_preflight_ready),
+        args=(full_workflow_ready,),
+        disabled=not full_workflow_ready,
         help=(
-            "One approval runs the complete evidence-to-verification path. It never merges a pull "
-            "request or invents credentials. Complete every required deployment-profile field "
-            "before a live deployment run."
+            "Verify judge access first. One approval then runs the complete "
+            "evidence-to-verification path. It never merges a pull request or invents "
+            "credentials. Complete every required deployment-profile field before a live "
+            "deployment run."
         ),
     )
-    st.caption(
-        "One approval: investigate → contain → draft → sandbox-test → complete the selected finish "
-        "action → prepare the receipt-backed handoff."
-    )
+    if PUBLIC_JUDGE_MODE and not model_available:
+        st.warning(
+            "Enter the judge access token in the sidebar and click **Verify judge access** "
+            "before starting the full workflow."
+        )
+    else:
+        st.caption(
+            "One approval: investigate → contain → draft → sandbox-test → complete the selected "
+            "finish action → prepare the receipt-backed handoff."
+        )
+launch_blocked = st.session_state.pop("workflow_launch_blocked", None)
+if launch_blocked:
+    st.warning(launch_blocked)
 
 workflow_status = st.empty()
 workflow_status.markdown(_workflow_html(_workflow_phase()), unsafe_allow_html=True)
@@ -1902,6 +2013,7 @@ if autonomous_result_status and not autonomous_result_status.get("verified"):
 
 run_autonomous_now = bool(
     not manual_mode
+    and full_workflow_ready
     and st.session_state.get("workflow_run_requested")
     and not st.session_state.get("workflow_running")
     and not st.session_state.get("workflow_cancel_requested")

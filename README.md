@@ -173,11 +173,12 @@ file the human selects.
 Without `ANTHROPIC_API_KEY`, the app runs an honest, read-only **evidence-only mode**: it connects
 to the real local DataHub through the official MCP server and deterministically ranks observable
 volume, freshness, and null-rate anomalies. It does not claim model reasoning or permit catalog
-writes in that mode. For the complete judge path, the deployed **judge gateway URL is preloaded**;
-enter the separately supplied **judge access code** in the sidebar. That route enables live model-backed reasoning,
-containment, and repair proposals without placing any provider key in the repository, browser,
-ZIP, or local environment. The access code is a bounded, rate-limited invitation credential, not
-an API key; the provider key remains an encrypted Cloudflare Worker secret.
+writes in that mode. For the complete judge path, use the private **Project URL supplied through
+Devpost**. The app consumes that invitation once, removes it from the browser address bar,
+authenticates the fixed reasoning gateway, and unlocks live model-backed reasoning, containment,
+and repair proposals without placing any provider key in the repository, browser UI, ZIP, or local
+environment. The invitation is bounded and rate-limited; it is not an API key, and the provider key
+remains an encrypted Cloudflare Worker secret.
 The secret-free submission checklist is in [`JUDGE-ACCESS-HANDOFF.md`](JUDGE-ACCESS-HANDOFF.md).
 
 ```bash
@@ -199,8 +200,9 @@ judge lane is fail-closed and self-contained: the Container runs an isolated Dat
 catalog plus the pinned official MCP Server, while internal database and token-service credentials
 are generated randomly on each cold start and remain inside its private network. A judge is never
 asked to paste a DataHub, GitHub, warehouse, orchestrator, or provider secret into the shared
-public process. The only judge input is the bounded invitation code supplied privately in the
-testing instructions; the reasoning provider key remains an encrypted Worker secret. The current
+public process. Devpost's judge-only Project URL carries a bounded invitation which the app verifies
+and removes from the address bar automatically; the reasoning provider key remains an encrypted
+Worker secret. The current
 external deployment state is recorded in [`LIVE-STATUS.md`](LIVE-STATUS.md). No shared public
 catalog, mocked lineage response, or synthetic MCP substitute is used.
 
@@ -211,8 +213,9 @@ that mode and reproduces the bundled incidents against a real local DataHub depl
 synthetic catalog is substituted when the contest tenant is unavailable.
 
 **Safe judge default:** Evidence-only mode starts read-only. With a local provider key or
-supplied judge gateway access, containment is enabled by default; uncheck it for a read-only
-model-backed investigation. Every requested tag is read back through MCP before the UI calls it
+supplied judge gateway access, containment is enabled by default; the advanced catalog controls
+offer an explicit read-only opt-out for a model-backed investigation. Every requested tag is read
+back through MCP before the UI calls it
 confirmed. During the approved workflow, **Trace** moves along the single execution rail beside
 the action button. Its percentage and stage copy come from real connection, lineage, reasoning,
 containment, sandbox, apply, and handoff callbacks. The rail is not a timer and never advances on
@@ -299,7 +302,8 @@ decision. Claude produced the original implementation during the submission peri
 performed the current upgrade and release pass: runtime isolation, hostile-path testing,
 connector/deployment verification, packaging, documentation reconciliation, and the public-judge
 release design. The final live demonstration was recorded from the deployed product only after the
-judge path passed end-to-end verification; its publication URL remains a separate submission step.
+judge path passed end-to-end verification and is public at
+[youtube.com/watch?v=TG6erPXMv7M](https://www.youtube.com/watch?v=TG6erPXMv7M).
 
 I built the agent to separate evidence, action, and claim: DataHub facts are gathered through MCP;
 containment writes are read back before they are announced; and a suggested repair remains a proposal

@@ -1,6 +1,6 @@
 # Lineage Detective release state
 
-Last reconciled: 2026-07-28 06:24 EDT
+Last reconciled: 2026-07-28 EDT
 
 This file is the canonical state ledger. `Implemented`, `tested`, `packaged`,
 `deployed`, `published`, and `submitted` are intentionally separate.
@@ -34,7 +34,10 @@ This file is the canonical state ledger. `Implemented`, `tested`, `packaged`,
 
 ## Green: current receipts
 
-- Latest final image-build suite: **205 passed, 0 failed** in 32.771 seconds.
+- Latest canonical suite: **211 passed, 0 failed, 1 platform skip** in 39.559 seconds.
+- Windows writer-lock regression: two concurrent applies serialize without
+  terminating the process; dead locks are reclaimed and live/unknown owners
+  are not stolen.
 - Deployed runtime image digest:
   `sha256:2d6da7d2a742318e067a6901e50fb44a7edaba518466b05512b268c8e5e640fd`.
 - Final UI/Container capture-contract regression suite: 55 passed.
@@ -88,33 +91,27 @@ This file is the canonical state ledger. `Implemented`, `tested`, `packaged`,
   rejected at HTTP 401. The final code is stored in the encrypted local owner
   handoff and remains valid through 2026-09-15.
 
-## Yellow: remaining external release gates
+## Yellow: final synchronization gates
 
 These are real gates, not product-code failures:
 
 1. **Current public repository.** The remote `main` branch is behind the local
    release work. Push only after the final release receipt is generated.
-2. **Video publication.** The final 169.733-second live demonstration is
-   locally complete and QA-verified. It still needs Bryan's approval, a public
-   YouTube upload, and anonymous readback.
-3. **Devpost synchronization.** Devpost confirmed submission `1077519` on
-   2026-07-12, and the public project page at
-   `https://devpost.com/software/lineage-detective` independently renders as
-   submitted to the DataHub hackathon. That published entry is an earlier
-   build: it still embeds YouTube video `3DDZsz4BtJU`, links the repository but
-   no live app, and describes the original diagnose/contain workflow rather
-   than this release candidate. Owner eligibility/IP attestations, the final
-   video, synchronized repository, live app, and judge instructions must be
-   entered and read back only after the preceding gates are green.
+2. **Hosted build.** Deploy the final committed source, wait through a fresh
+   cold start, then complete the private invitation workflow and public
+   fail-closed check.
+3. **Devpost synchronization.** Devpost submission `1077519` already contains
+   the approved public video and current story. Save and read back the final
+   thumbnail, tagline, private judge Project URL, sample-output URL, and
+   DataHub technology selections after the hosted build is green.
 
 ## Release order
 
 1. Freeze source and documentation; bind the final release receipt.
 2. Push the public Apache-2.0 repository and read it back anonymously.
-3. After owner approval, upload the final live video publicly and read it back
-   anonymously.
-4. Update the already-submitted Devpost entry and read back every public field.
+3. Update the already-submitted Devpost entry and read back every public and
+   judge-only field.
 
 Until those release-synchronization steps complete, the honest state is:
-**final product and public judge path verified; repository, media, and Devpost
-are not yet synchronized to this release.**
+**final product and video verified; repository, hosted build, and Devpost
+release fields are awaiting final synchronization.**

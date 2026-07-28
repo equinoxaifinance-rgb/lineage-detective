@@ -12,12 +12,12 @@ of judging.
 | Official requirement | Evidence | State |
 |---|---|---|
 | Working application using DataHub plus MCP Server, Agent Context Kit, DataHub Skills, or Analytics Agent | MCP search, lineage, entity reads, tag writes/readback; reusable DataHub skill | Green in packaged tests |
-| Project functions as depicted and described | 205-test packaged suite plus live browser, DataHub write/readback, sandbox, apply, and download receipts | Green in current release candidate |
+| Project functions as depicted and described | Canonical suite receipt in `RELEASE-VERIFICATION.md` plus live browser, DataHub write/readback, sandbox, apply, and download receipts | Green in current release candidate |
 | Easy project URL for judges | `https://lineage-detective.equinoxaifinance.workers.dev` | Green: public app and full judge path verified |
-| Public repository with all source, assets, and setup instructions | `https://github.com/equinoxaifinance-rgb/lineage-detective` | Yellow: synchronize and anonymous-readback |
-| Apache 2.0 license visible in repository | `LICENSE` | File green; GitHub About detection pending |
+| Public repository with all source, assets, and setup instructions | `https://github.com/equinoxaifinance-rgb/lineage-detective` | Final synchronization and anonymous readback are release gates |
+| Apache 2.0 license visible in repository | `LICENSE` | File green; GitHub About detection is a release gate |
 | English project description | `SUBMISSION-DRAFT.md` | Draft green; existing Devpost description is historical and must be synchronized |
-| Public video under three minutes showing the product functioning | Final 169.733-second natural-speed live-action video | Media green; owner approval and public YouTube URL remain publication gates |
+| Public video under three minutes showing the product functioning | `https://www.youtube.com/watch?v=TG6erPXMv7M`, 169.733-second natural-speed live-action video | Green: public playback and metadata read back |
 | Sample generated outputs recommended | `examples/generated/` with verified receipts and handoff archives | Green |
 | Free, unrestricted access through August 31 | Bundled public judge DataHub plus bounded reasoning access through September 15 | Green: final code rotated and authenticated through live preflight |
 | Newly built during submission period; prior work disclosed | README provenance section | Owner attestation required |

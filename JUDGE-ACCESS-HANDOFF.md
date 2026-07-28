@@ -4,11 +4,12 @@ This tracked file contains no credential. It defines the exact release path.
 
 ## Public judge path
 
-The final release is designed to require one invitation code:
+The final release is designed to require one judge-only invitation URL:
 
-1. Open the public Lineage Detective URL from Devpost.
-2. Enter the judge access code from Devpost's testing instructions.
-3. The app authenticates to the fixed reasoning gateway and connects
+1. Open the private Project URL supplied to judges through Devpost.
+2. The app consumes the bounded invitation once, removes it from the address
+   bar, and authenticates the fixed reasoning gateway automatically.
+3. The app connects
    server-side to a dedicated, non-sensitive DataHub judge catalog.
 4. Select an included incident or search the live catalog.
 5. Run the investigation. The app reads DataHub through MCP, contains through
@@ -45,8 +46,8 @@ is placed in Devpost. The access window is configured through
 - Request and response sizes and model output are bounded.
 - The fixed public runtime rejects arbitrary connector credentials and
   deployment commands.
-- The final code is stored only in an encrypted local owner handoff and
-  Devpost's judge testing instructions.
+- The final code is stored only in an encrypted local owner handoff and the
+  judge-only Devpost Project URL.
 
 ## Self-hosted evaluator path
 
@@ -67,6 +68,7 @@ The invitation code used during testing was intentionally temporary and is now
 rejected by the gateway. The final code was generated after the last browser
 test, installed as an encrypted Cloudflare secret, authenticated through the
 live `/preflight` endpoint, and stored in the encrypted local owner handoff.
-Only its SHA-256 is present in the rotation receipt. It still must be copied to
-Devpost's private testing instructions during release synchronization. See
-[LIVE-STATUS.md](LIVE-STATUS.md) for the current release stage.
+Only its SHA-256 is present in the rotation receipt. During release
+synchronization, it is placed only in Devpost's judge-only Project URL. The
+public gallery URL remains secret-free. See [LIVE-STATUS.md](LIVE-STATUS.md)
+for the current release stage.

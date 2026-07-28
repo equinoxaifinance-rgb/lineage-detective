@@ -549,6 +549,15 @@ class RepairTests(unittest.TestCase):
             self.assertTrue(result["applied"], result)
             self.assertFalse(lock.exists())
 
+    @unittest.skipUnless(os.name == "nt", "Windows-specific liveness probe")
+    def test_windows_liveness_probe_does_not_call_os_kill(self):
+        with mock.patch.object(
+            repair.os,
+            "kill",
+            side_effect=AssertionError("os.kill(pid, 0) is destructive on Windows"),
+        ):
+            self.assertEqual(repair._process_state(os.getpid()), "alive")
+
     def test_unprobeable_live_process_lock_is_not_stolen(self):
         original = b"select legacy_email as email\n"
         receipt = verified_receipt(VALID_SQL, original)
@@ -564,7 +573,7 @@ class RepairTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            with mock.patch.object(repair.os, "kill", side_effect=PermissionError):
+            with mock.patch.object(repair, "_process_state", return_value="unknown"):
                 result = repair.apply_verified_repair(
                     receipt,
                     target_file=target,

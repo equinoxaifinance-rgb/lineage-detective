@@ -1,6 +1,6 @@
 # Release verification
 
-Verified on 2026-07-28 06:24 EDT. This document records executed facts and unresolved
+Verified on 2026-07-28 EDT. This document records executed facts and unresolved
 external gates. It does not claim contest placement or production safety for an
 unknown customer environment.
 
@@ -8,7 +8,7 @@ unknown customer environment.
 
 | Surface | Verification | Result |
 |---|---|---|
-| Complete Python suite | Latest verified final image-build stage; `python -m unittest discover -s tests -q` | 205 passed, 0 failed in 32.771s |
+| Complete Python suite | Canonical aggregate runner over `tests/` | 211 passed, 0 failed, 1 platform skip in 39.559s |
 | Source syntax | `python -m compileall -q /app` inside the packaged image | exit 0 |
 | Python dependency graph | `python -m pip check` inside the packaged image | no broken requirements |
 | Python advisories | `pip-audit==2.10.1` against `requirements-runtime.lock` with hashes and pip resolution disabled | no known vulnerabilities |
@@ -16,7 +16,8 @@ unknown customer environment.
 | Packaged startup | Fresh container, Streamlit health endpoint and root HTTP request | health `ok`; root HTTP 200; UID 1000; `.streamlit/config.toml` and current README present |
 | Rendered UI | Fresh in-app browser session against the current runtime image | heading, concise trust disclosure, incident selector, inputs, primary workflow action, and live progress region rendered; fresh browser log contained 0 errors |
 | Missing-catalog UI | Streamlit AppTest in `public_judge` mode with all DataHub catalog variables absent | judge-code field absent; judge lane disabled; no credential requested from the judge; no exception |
-| Docker packaging | Fresh verified build after the official-MCP readiness, telemetry isolation, and documentation reconciliation fixes | 205 tests passed in the image build; Cloudflare version 41 runs digest `sha256:2d6da7d2a742318e067a6901e50fb44a7edaba518466b05512b268c8e5e640fd` |
+| Docker packaging | Fresh image build runs compilation, the complete suite, the security-boundary verifier, and example verification before export | Final deployment receipt is captured after the last source commit |
+| Windows writer locks | Live two-writer collision plus stale/live-owner probes | Windows-safe process liveness query; no `os.kill(pid, 0)` self-termination; collision refused cleanly |
 | Example artifacts | `python tools/verify_release_examples.py` | 3 cases and every bound artifact verified |
 | Security boundary | `python tools/verify_security_boundary.py` | fixed app runtime; disclosed isolated upstream compatibility boundary |
 | Judge gateway | Node syntax, 8 runtime tests, npm audit, Wrangler dry-run | all passed; 0 vulnerabilities |
@@ -66,18 +67,19 @@ package. It does not execute untrusted source packages in the app runtime, and
 the normal tested DataHub MCP path works, but it is not mislabeled as an
 upstream fix.
 
-## External gates not yet verified
+## Final synchronization gates
 
-- The remote public repository is not synchronized with this release.
-- The locally verified final video is not yet uploaded to a public YouTube URL.
-- Devpost confirmed submission `1077519` on 2026-07-12, and the public
-  `https://devpost.com/software/lineage-detective` page renders the entry as
-  submitted to this hackathon. It is not synchronized with this release: it
-  embeds the historical YouTube video `3DDZsz4BtJU`, has no live-app link, and
-  carries the original narrower feature description. No Devpost field was
-  changed during this verification pass.
+- The final source commit must be pushed and read back anonymously before the
+  repository is called synchronized.
+- The final Container image must be deployed, cold-started, and exercised
+  through the private invitation path before the hosted build is called
+  synchronized.
+- Devpost submission `1077519` already carries the final public video and
+  current product story. Its thumbnail, tagline, judge-only Project URL,
+  sample-output URL, and DataHub technology selections must be saved and read
+  back after the final deployment.
 
-Those items remain yellow in [LIVE-STATUS.md](LIVE-STATUS.md).
+These release-order gates are tracked in [LIVE-STATUS.md](LIVE-STATUS.md).
 
 ## Primary-source rule check
 

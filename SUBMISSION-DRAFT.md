@@ -37,9 +37,10 @@ action complete without readback.
    command, or a deployment profile with an independent live health check and
    verified rollback.
 
-The public judge build keeps all catalog and provider secrets server-side and
-uses a bounded invitation code. Customer credentials are never requested by
-the shared public process.
+The public judge build keeps all catalog and provider secrets server-side.
+Devpost's judge-only Project URL carries a bounded invitation which the app
+verifies and removes from the address bar automatically. Customer credentials
+are never requested by the shared public process.
 
 ## How we built it
 
@@ -52,7 +53,7 @@ the shared public process.
 - Cloudflare Workers, Durable Objects, rate-limit bindings, and Containers for
   the hosted judge path.
 - Digest-pinned, hash-locked dependencies and a non-root container.
-- A 205-test packaged suite covering normal, hostile, failure, retry,
+- A comprehensive packaged suite covering normal, hostile, failure, retry,
   concurrency, authorization, integrity, connector, and rollback paths.
 
 ## Challenges
@@ -112,5 +113,7 @@ kept correcting one another until the claims matched the work.
 
 - Live app: `https://lineage-detective.equinoxaifinance.workers.dev`
 - Public repository: `https://github.com/equinoxaifinance-rgb/lineage-detective`
-- Public video: `[PENDING PUBLIC YOUTUBE URL FOR THE VERIFIED FINAL VIDEO]`
-- Testing instructions: `[INSERT THE PRIVATE JUDGE CODE FROM THE ENCRYPTED OWNER HANDOFF; NEVER COMMIT IT]`
+- Public video: `https://www.youtube.com/watch?v=TG6erPXMv7M`
+- Sample outputs: `https://github.com/equinoxaifinance-rgb/lineage-detective/tree/main/examples/generated`
+- Judge testing path: the private Devpost Project URL consumes the bounded
+  invitation automatically; no credential is committed here.

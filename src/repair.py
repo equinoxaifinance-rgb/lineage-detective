@@ -18,6 +18,8 @@ chooses whether to export the handoff or implement the verified file change.
 from __future__ import annotations
 
 import difflib
+import ctypes
+import ctypes.wintypes
 import hashlib
 import io
 import json
@@ -50,6 +52,56 @@ select
     created_at
 from {{ ref('raw_customers') }}
 """
+
+
+def _process_state(pid: int) -> str:
+    """Return ``alive``, ``dead``, or ``unknown`` without harming the target process."""
+    if pid <= 0:
+        return "dead"
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return "dead"
+        except PermissionError:
+            return "alive"
+        except OSError:
+            return "unknown"
+        return "alive"
+
+    # On Windows, os.kill(pid, 0) delegates to TerminateProcess and can kill the
+    # process it was meant only to inspect. Query the process handle instead.
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [
+        ctypes.wintypes.DWORD,
+        ctypes.wintypes.BOOL,
+        ctypes.wintypes.DWORD,
+    ]
+    kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.POINTER(ctypes.wintypes.DWORD),
+    ]
+    kernel32.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+    process_query_limited_information = 0x1000
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # ERROR_INVALID_PARAMETER: no such PID.
+            return "dead"
+        if error == 5:  # ERROR_ACCESS_DENIED: process exists but is protected.
+            return "alive"
+        return "unknown"
+    try:
+        exit_code = ctypes.wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return "unknown"
+        return "alive" if exit_code.value == still_active else "dead"
+    finally:
+        kernel32.CloseHandle(handle)
 
 FIXED_SCHEMA_MAPPING_SQL = """-- staging model: types + maps the CRM customer export into the analytics schema.
 select
@@ -1121,16 +1173,8 @@ def _apply_to_locked_target(
                 if owner_pid <= 0 or age > 900:
                     stale = True
                 else:
-                    try:
-                        os.kill(owner_pid, 0)
-                    except ProcessLookupError:
-                        stale = True
-                    except PermissionError:
-                        # A permission denial proves the process exists but is
-                        # not probeable. Never steal an active writer's lock.
-                        stale = False
-                    except OSError:
-                        stale = True
+                    process_state = _process_state(owner_pid)
+                    stale = process_state == "dead"
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 try:
                     stale = time.time() - lock.stat().st_mtime > 900

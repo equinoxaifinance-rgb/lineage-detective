@@ -77,11 +77,90 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn('DEFAULT_JUDGE_ENDPOINT = "https://lineage-detective-judge-gateway.equinoxaifinance.workers.dev"', APP)
         self.assertIn('"Judge model gateway URL (optional)"', APP)
         self.assertIn('"Judge access code (optional)"', APP)
+        self.assertIn('"Verify judge access"', APP)
+        self.assertIn("Secure judge AI relay configured server-side.", APP)
         self.assertIn("preflight_judge_gateway(", APP)
         self.assertIn("Model-backed judge gateway verified.", APP)
         self.assertNotIn("elif gateway_model:\\n        st.success", APP)
         self.assertIn("reasoning_endpoint=judge_endpoint or None, judge_code=judge_code or None", APP)
         self.assertIn("provider key remains server-side", APP)
+
+    def test_public_judge_code_requires_the_visible_verify_action(self):
+        self.assertIn("or st.button(", APP)
+        self.assertIn(
+            "should_verify_gateway = bool(not hosted_gateway or verify_judge_clicked)",
+            APP,
+        )
+        self.assertIn("judge_gateway_verified_fingerprint", APP)
+        self.assertIn(
+            "Judge code entered. Click **Verify judge access**",
+            APP,
+        )
+
+    def test_private_devpost_invitation_is_consumed_once_and_removed_from_url(self):
+        self.assertIn("def _consume_private_judge_invitation()", APP)
+        self.assertIn('st.query_params.get("judge")', APP)
+        self.assertIn('st.session_state["judge_access_input"] = invitation', APP)
+        self.assertIn('st.session_state["judge_access_autoverify"] = True', APP)
+        self.assertIn("st.query_params.clear()", APP)
+        self.assertIn('key="judge_access_input"', APP)
+        self.assertIn(
+            'st.session_state.pop("judge_access_autoverify", False)',
+            APP,
+        )
+
+    def test_full_judge_workflow_cannot_start_without_verified_model_access(self):
+        self.assertIn(
+            "full_workflow_ready = bool(",
+            APP,
+        )
+        self.assertIn(
+            "and model_available",
+            APP,
+        )
+        self.assertIn(
+            "disabled=not full_workflow_ready",
+            APP,
+        )
+        self.assertIn(
+            "before starting the full workflow.",
+            APP,
+        )
+        self.assertIn("def _queue_autonomous_workflow(ready: bool = False)", APP)
+        self.assertIn("args=(full_workflow_ready,)", APP)
+        self.assertIn(
+            "and full_workflow_ready\n    and st.session_state.get(\"workflow_run_requested\")",
+            APP,
+        )
+
+    def test_streamlit_reruns_do_not_dim_the_existing_judge_interface(self):
+        self.assertIn(
+            '[data-testid="stElementContainer"][data-stale="true"]',
+            APP,
+        )
+        self.assertIn("opacity:1!important;transition:none!important", APP)
+
+    def test_read_only_is_an_advanced_opt_out_from_verified_catalog_tags(self):
+        self.assertIn(
+            'st.expander("Advanced catalog controls", expanded=False)',
+            APP,
+        )
+        self.assertIn(
+            '"Read-only investigation (do not write incident warning tags)"',
+            APP,
+        )
+        self.assertIn(
+            "contain = bool(model_available and not read_only_investigation)",
+            APP,
+        )
+        self.assertIn(
+            "Neither mode deletes data, stops",
+            APP,
+        )
+        self.assertIn(
+            "pipelines, or changes production code.",
+            APP,
+        )
 
     def test_public_judge_code_is_hidden_until_catalog_preflight_passes(self):
         self.assertIn(
@@ -398,10 +477,8 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn('"LINEAGE_DEPLOY_ROLLBACK_COMMAND"', APP)
         self.assertIn('"LINEAGE_DEPLOY_ROLLBACK_VERIFY_COMMAND"', APP)
         self.assertIn("deployment_profile=deployment_profile", APP)
-        self.assertIn(
-            "disabled=not (deployment_profile_ready and catalog_preflight_ready)",
-            APP,
-        )
+        self.assertIn("disabled=not full_workflow_ready", APP)
+        self.assertIn("deployment_profile_ready\n    and catalog_preflight_ready", APP)
         self.assertIn("allow_local_deployment=SELF_HOSTED_MODE", APP)
         self.assertIn('"Download deployment receipt"', APP)
         self.assertIn("terminal_verified, _terminal_reason = verify_deployment_receipt(", APP)
