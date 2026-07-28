@@ -286,6 +286,10 @@ class JudgeUiContractTests(unittest.TestCase):
             'st.session_state["autonomous_workflow_error"] = (',
             APP,
         )
+        self.assertIn(
+            'if run_autonomous_now:\n                raise',
+            APP,
+        )
 
     def test_stationary_mascot_appears_inside_real_investigation_progress(self):
         self.assertIn('DROID_NAME = "Trace"', APP)

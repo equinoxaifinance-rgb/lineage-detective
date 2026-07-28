@@ -183,6 +183,57 @@ test("valid access consumes one budget unit and returns only provider text", asy
   }
 });
 
+test("evidence URNs become the only schema-valid suspect identifiers", async () => {
+  const { env } = environment();
+  const observed = "urn:li:dataset:(urn:li:dataPlatform:postgres,analytics.raw.orders,PROD)";
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    const providerBody = JSON.parse(init.body);
+    assert.deepEqual(
+      providerBody.output_config.format.schema.properties.suspects.items
+        .properties.urn.enum,
+      [observed],
+    );
+    return Response.json({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          summary: "Grounded report.",
+          suspects: [{
+            urn: observed,
+            why: "The observed row count dropped.",
+            check_next: "Inspect the source extract.",
+            owner: null,
+            confidence: "high",
+          }],
+          missing_evidence: null,
+        }),
+      }],
+      stop_reason: "end_turn",
+    });
+  };
+  try {
+    const response = await worker.fetch(
+      new Request("https://gateway.test/reason", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-lineage-judge-code": "test-judge-code",
+        },
+        body: JSON.stringify({
+          system: "Return JSON.",
+          user: `Evidence:\n    urn: ${observed}\nDiagnose.`,
+        }),
+      }),
+      env,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(JSON.parse((await response.json()).text).suspects[0].urn, observed);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("invalid provider output fails closed after one budget unit", async () => {
   const { env, calls } = environment();
   const realFetch = globalThis.fetch;

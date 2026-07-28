@@ -38,6 +38,27 @@ const REPORT_SCHEMA = {
   additionalProperties: false,
 };
 
+function evidenceUrns(user) {
+  const urns = [];
+  for (const line of String(user || "").split(/\r?\n/)) {
+    const match = line.match(/^\s*urn:\s*(urn:li:.+?)\s*$/);
+    if (match && !urns.includes(match[1])) urns.push(match[1]);
+  }
+  return urns.slice(0, 100);
+}
+
+function reportSchemaFor(user) {
+  const schema = JSON.parse(JSON.stringify(REPORT_SCHEMA));
+  const urns = evidenceUrns(user);
+  if (urns.length) {
+    schema.properties.suspects.items.properties.urn = {
+      type: "string",
+      enum: urns,
+    };
+  }
+  return schema;
+}
+
 function cors() {
   // A judge runs the app locally, so the origin is not known in advance. The access code,
   // fixed model, payload limits, and Worker rate limiter protect the endpoint; no secret
@@ -196,7 +217,7 @@ export default {
         output_config: {
           format: {
             type: "json_schema",
-            schema: REPORT_SCHEMA,
+            schema: reportSchemaFor(body.user),
           },
         },
         ...(typeof body.system === "string" && body.system ? { system: body.system } : {}),

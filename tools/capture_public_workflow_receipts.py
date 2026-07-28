@@ -35,6 +35,7 @@ HANDOFF = OUT / "v43-human-handoff.zip"
 RESULT = OUT / "v43-public-workflow-receipt.json"
 DIAGNOSTIC = OUT / "v43-public-workflow-diagnostic.txt"
 DIAGNOSTIC_SCREENSHOT = OUT / "v43-public-workflow-diagnostic.png"
+TIMELINE = OUT / "v43-public-workflow-timeline.jsonl"
 
 
 def sha256(path: Path) -> str:
@@ -77,6 +78,7 @@ def main() -> None:
         RESULT,
         DIAGNOSTIC,
         DIAGNOSTIC_SCREENSHOT,
+        TIMELINE,
     ):
         artifact.unlink(missing_ok=True)
     code = judge_code()
@@ -165,9 +167,42 @@ def main() -> None:
             if slider.input_value() != "6":
                 raise RuntimeError("Judge workflow did not select six hops.")
 
+            # Changing the Streamlit slider causes a script rerun. Re-resolve the
+            # primary action after that rerun and prove the click was accepted
+            # before starting the workflow deadline.
+            page.wait_for_timeout(1_500)
+            run_button = page.get_by_role(
+                "button", name="Approve & run full verified workflow", exact=True
+            )
+            run_button.wait_for(state="visible", timeout=30_000)
+            page.wait_for_function(
+                """
+                () => {
+                  const button = [...document.querySelectorAll("button")].find(
+                    (candidate) => candidate.textContent.trim() ===
+                      "Approve & run full verified workflow"
+                  );
+                  return Boolean(button && !button.disabled);
+                }
+                """,
+                timeout=30_000,
+            )
             run_button.click()
+            try:
+                page.get_by_role(
+                    "button", name="Cancel current run", exact=True
+                ).wait_for(state="visible", timeout=30_000)
+            except Exception:
+                body_text = page.locator("body").inner_text(timeout=15_000)
+                DIAGNOSTIC.write_text(body_text, encoding="utf-8")
+                page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
+                raise RuntimeError(
+                    "Public workflow click was not accepted after the slider rerun."
+                )
             progress = page.locator('[aria-label="Verified workflow progress"]')
             deadline = time.monotonic() + 420
+            run_started_at = time.monotonic()
+            previous_snapshot = None
             body_text = ""
             while time.monotonic() < deadline:
                 body_text = page.locator("body").inner_text(timeout=15_000)
@@ -176,6 +211,32 @@ def main() -> None:
                     if progress.count()
                     else ""
                 )
+                snapshot = {
+                    "elapsed_seconds": round(time.monotonic() - run_started_at, 3),
+                    "progress": progress_text,
+                    "approve_button": page.get_by_role(
+                        "button",
+                        name="Approve & run full verified workflow",
+                        exact=True,
+                    ).count(),
+                    "cancel_button": page.get_by_role(
+                        "button", name="Cancel current run", exact=True
+                    ).count(),
+                    "access_verified": "Model-backed judge gateway verified." in body_text,
+                    "failure_visible": any(
+                        marker in body_text
+                        for marker in (
+                            "Investigation failed:",
+                            "Workflow failed:",
+                            "Sandbox trial failed:",
+                            "The autonomous workflow stopped before completion.",
+                        )
+                    ),
+                }
+                if snapshot != previous_snapshot:
+                    with TIMELINE.open("a", encoding="utf-8") as timeline:
+                        timeline.write(json.dumps(snapshot, sort_keys=True) + "\n")
+                    previous_snapshot = snapshot
                 if (
                     "100%" in progress_text
                     and "2 downstream assets; 2 tag writes confirmed" in body_text
@@ -190,6 +251,26 @@ def main() -> None:
                     DIAGNOSTIC.write_text(body_text, encoding="utf-8")
                     page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
                     raise RuntimeError("Public workflow exposed a visible failure state.")
+                if (
+                    "Judge code entered. Click Verify judge access" in body_text
+                    or "Model-backed judge gateway verified." not in body_text
+                ):
+                    DIAGNOSTIC.write_text(body_text, encoding="utf-8")
+                    page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
+                    raise RuntimeError(
+                        "Public workflow session restarted and lost judge authorization."
+                    )
+                if (
+                    snapshot["elapsed_seconds"] > 20
+                    and snapshot["approve_button"] == 1
+                    and snapshot["cancel_button"] == 0
+                    and "100%" not in progress_text
+                ):
+                    DIAGNOSTIC.write_text(body_text, encoding="utf-8")
+                    page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
+                    raise RuntimeError(
+                        "Public workflow returned to idle without a terminal result."
+                    )
                 time.sleep(2)
             else:
                 DIAGNOSTIC.write_text(body_text, encoding="utf-8")

@@ -2133,6 +2133,8 @@ if manual_clicked or run_autonomous_now:
                 f"{type(exc).__name__}: {exc}",
             )
             st.error(f"Investigation failed: {type(exc).__name__}: {exc}")
+            if run_autonomous_now:
+                raise
 
     if run_autonomous_now:
         try:
