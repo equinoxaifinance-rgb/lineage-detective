@@ -203,6 +203,7 @@ def main() -> None:
             deadline = time.monotonic() + 420
             run_started_at = time.monotonic()
             previous_snapshot = None
+            idle_since = None
             body_text = ""
             while time.monotonic() < deadline:
                 body_text = page.locator("body").inner_text(timeout=15_000)
@@ -266,11 +267,16 @@ def main() -> None:
                     and snapshot["cancel_button"] == 0
                     and "100%" not in progress_text
                 ):
-                    DIAGNOSTIC.write_text(body_text, encoding="utf-8")
-                    page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
-                    raise RuntimeError(
-                        "Public workflow returned to idle without a terminal result."
-                    )
+                    if idle_since is None:
+                        idle_since = time.monotonic()
+                    elif time.monotonic() - idle_since > 15:
+                        DIAGNOSTIC.write_text(body_text, encoding="utf-8")
+                        page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
+                        raise RuntimeError(
+                            "Public workflow returned to idle without a terminal result."
+                        )
+                else:
+                    idle_since = None
                 time.sleep(2)
             else:
                 DIAGNOSTIC.write_text(body_text, encoding="utf-8")
