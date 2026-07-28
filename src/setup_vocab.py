@@ -16,8 +16,10 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 try:
     from .network_policy import validate_network_url, validate_resolution
+    from .runtime_mode import is_bundled_catalog_url, is_self_hosted
 except ImportError:
     from network_policy import validate_network_url, validate_resolution
+    from runtime_mode import is_bundled_catalog_url, is_self_hosted
 
 INCIDENT_VOCABULARY = (
     ("QUARANTINE_INCIDENT", "Root cause of a data incident — quarantined by Lineage Detective."),
@@ -37,7 +39,7 @@ def _sidecar_python() -> str:
 
 def ensure_incident_vocabulary(server: str, token: str | None = None) -> list[str]:
     """Create and read back the two tag entities through the available route."""
-    allow_private = os.environ.get("HOSTED_MODE") != "1"
+    allow_private = is_self_hosted() or is_bundled_catalog_url(server)
     server = validate_network_url(
         server,
         allow_private=allow_private,
@@ -59,7 +61,7 @@ def ensure_incident_vocabulary(server: str, token: str | None = None) -> list[st
 
 
 def _graphql(server: str, token: str | None, query: str, variables: dict) -> dict:
-    allow_private = os.environ.get("HOSTED_MODE") != "1"
+    allow_private = is_self_hosted() or is_bundled_catalog_url(server)
     validate_resolution(
         server,
         allow_private=allow_private,

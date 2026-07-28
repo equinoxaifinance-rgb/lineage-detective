@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
+    "deploy:dry-run": "wrangler deploy --dry-run",
     "status": "wrangler containers list"
   },
   "dependencies": {

@@ -66,7 +66,7 @@ An adapter qualifies only when it provides:
 1. a bounded authenticated call;
 2. a target-specific idempotency or unique run identifier;
 3. a readback or target-system state;
-4. a secret-free, SHA-256-bound receipt;
+4. a receipt that omits credentials and binds its content with SHA-256;
 5. failure behavior that cannot be mistaken for success.
 
 The connector implementations live in `src/remediation_connectors.py`; the transactional deployment

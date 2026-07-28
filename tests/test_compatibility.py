@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -20,9 +22,23 @@ SPEC = importlib.util.spec_from_file_location("lineage_quickstart", ROOT / "quic
 quickstart = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
 SPEC.loader.exec_module(quickstart)
+sys.path.insert(0, str(ROOT / "src"))
+import datahub_mcp  # noqa: E402
 
 
 class CompatibilityBridgeTests(unittest.TestCase):
+    def test_quickstart_help_is_read_only_and_available_without_docker(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "quickstart.py"), "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("self-hosted quickstart", result.stdout)
+        self.assertIn("Requires Docker Desktop", result.stdout)
+
     def test_runtime_requirements_keep_the_fixed_setuptools(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         self.assertIn("setuptools==83.0.0", requirements)
@@ -61,6 +77,92 @@ class CompatibilityBridgeTests(unittest.TestCase):
     def test_selected_executable_contract_avoids_windows_path_splitting(self):
         source = (ROOT / "src" / "datahub_mcp.py").read_text(encoding="utf-8")
         self.assertIn('DATAHUB_MCP_EXECUTABLE', source)
+
+    def test_release_path_refuses_execution_time_mcp_install(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(datahub_mcp.os.path, "exists", return_value=False),
+            patch.object(datahub_mcp.shutil, "which", return_value="uvx"),
+        ):
+            with self.assertRaisesRegex(FileNotFoundError, "Run quickstart.py"):
+                datahub_mcp._server_command()
+
+    def test_unpinned_override_requires_explicit_development_opt_in(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "LINEAGE_ALLOW_UNPINNED_MCP": "1",
+                    "DATAHUB_MCP_CMD": "custom-mcp --dev",
+                },
+                clear=True,
+            ),
+            patch.object(datahub_mcp.os.path, "exists", return_value=False),
+        ):
+            self.assertEqual(datahub_mcp._server_command(), ("custom-mcp", ["--dev"]))
+
+    def test_arbitrary_selected_executable_is_rejected_without_opt_in(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"DATAHUB_MCP_EXECUTABLE": r"C:\Windows\System32\cmd.exe"},
+                clear=True,
+            ),
+            patch.object(datahub_mcp.os.path, "isfile", return_value=True),
+            patch.object(datahub_mcp.os.path, "islink", return_value=False),
+        ):
+            with self.assertRaisesRegex(PermissionError, "outside the hash-locked"):
+                datahub_mcp._server_command()
+
+    def test_public_container_accepts_only_its_root_owned_hash_locked_sidecar(self):
+        packaged = "/opt/datahub-sidecar/bin/mcp-server-datahub"
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "LINEAGE_RUN_MODE": "public_judge",
+                    "LINEAGE_BUNDLED_DATAHUB": "1",
+                    "DATAHUB_MCP_EXECUTABLE": packaged,
+                },
+                clear=True,
+            ),
+            patch.object(datahub_mcp.os.path, "isfile", return_value=True),
+            patch.object(datahub_mcp.os.path, "islink", return_value=False),
+            patch.object(datahub_mcp.os.path, "realpath", side_effect=lambda value: value),
+        ):
+            self.assertEqual(datahub_mcp._server_command(), (packaged, []))
+
+    def test_packaged_sidecar_path_stays_rejected_without_public_bundle_flag(self):
+        packaged = "/opt/datahub-sidecar/bin/mcp-server-datahub"
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "LINEAGE_RUN_MODE": "public_judge",
+                    "DATAHUB_MCP_EXECUTABLE": packaged,
+                },
+                clear=True,
+            ),
+            patch.object(datahub_mcp.os.path, "isfile", return_value=True),
+            patch.object(datahub_mcp.os.path, "islink", return_value=False),
+            patch.object(datahub_mcp.os.path, "realpath", side_effect=lambda value: value),
+        ):
+            with self.assertRaisesRegex(PermissionError, "outside the hash-locked"):
+                datahub_mcp._server_command()
+
+    def test_selected_executable_on_another_drive_is_rejected(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"DATAHUB_MCP_EXECUTABLE": r"D:\tools\mcp-server-datahub.exe"},
+                clear=True,
+            ),
+            patch.object(datahub_mcp.os.path, "isfile", return_value=True),
+            patch.object(datahub_mcp.os.path, "islink", return_value=False),
+            patch.object(datahub_mcp.os.path, "commonpath", side_effect=ValueError),
+        ):
+            with self.assertRaisesRegex(PermissionError, "outside the hash-locked"):
+                datahub_mcp._server_command()
 
     def test_unified_route_refuses_unhashed_installation(self):
         source = (ROOT / "quickstart.py").read_text(encoding="utf-8")

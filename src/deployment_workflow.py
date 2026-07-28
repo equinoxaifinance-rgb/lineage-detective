@@ -41,6 +41,44 @@ def _hash_json(value: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _seal_deployment_receipt(result: dict[str, Any]) -> dict[str, Any]:
+    result.pop("deployment_receipt_sha256", None)
+    result["deployment_receipt_sha256"] = _hash_json(result)
+    return result
+
+
+def verify_deployment_receipt_integrity(
+    receipt: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    """Verify a deployment receipt's hash regardless of terminal outcome."""
+    if not isinstance(receipt, dict):
+        return False, "Deployment receipt is missing."
+    unsigned = dict(receipt)
+    supplied = str(unsigned.pop("deployment_receipt_sha256", ""))
+    if not supplied or supplied != _hash_json(unsigned):
+        return False, "Deployment receipt integrity verification failed."
+    return True, "verified"
+
+
+def verify_deployment_receipt(receipt: dict[str, Any] | None) -> tuple[bool, str]:
+    """Verify integrity plus the real deploy/readback success state."""
+    integrity_valid, integrity_reason = verify_deployment_receipt_integrity(receipt)
+    if not integrity_valid:
+        return False, integrity_reason
+    assert isinstance(receipt, dict)
+    if (
+        receipt.get("state") != "deployed_verified"
+        or receipt.get("deployed") is not True
+        or receipt.get("verified") is not True
+        or not isinstance(receipt.get("deploy"), dict)
+        or receipt["deploy"].get("verified") is not True
+        or not isinstance(receipt.get("live_verification"), dict)
+        or receipt["live_verification"].get("verified") is not True
+    ):
+        return False, "Deployment receipt does not prove deploy plus independent live readback."
+    return True, "verified"
+
+
 def _valid_apply_receipt(receipt: dict[str, Any]) -> tuple[bool, str]:
     if receipt.get("state") != "applied_verified" or receipt.get("applied") is not True:
         return False, "A verified exact-byte implementation receipt is required before deployment."
@@ -140,26 +178,22 @@ def run_verified_deployment(
     }
     if not approval or not str(approval).strip():
         result["error"] = "Deployment requires the user's explicit approval."
-        result["deployment_receipt_sha256"] = _hash_json(result)
-        return result
+        return _seal_deployment_receipt(result)
     if not allow_local_execution:
         result["error"] = (
             "Self-hosted command deployment is disabled in this process. "
             "Run Lineage Detective inside the customer's controlled environment."
         )
-        result["deployment_receipt_sha256"] = _hash_json(result)
-        return result
+        return _seal_deployment_receipt(result)
 
     apply_valid, apply_reason = _valid_apply_receipt(apply_receipt)
     if not apply_valid:
         result["error"] = apply_reason
-        result["deployment_receipt_sha256"] = _hash_json(result)
-        return result
+        return _seal_deployment_receipt(result)
     normalized, profile_error = _validate_profile(profile, apply_receipt)
     if profile_error or normalized is None:
         result["error"] = profile_error
-        result["deployment_receipt_sha256"] = _hash_json(result)
-        return result
+        return _seal_deployment_receipt(result)
 
     runner = command_runner or run_project_validation
     restore = restore_runner or restore_applied_repair
@@ -183,8 +217,10 @@ def run_verified_deployment(
     rollback_receipt = rollback_verify_receipt = None
     restore_receipt = None
     failure: str | None = None
+    deploy_attempted = False
     try:
         progress("deploying", "Trace is deploying the exact hash-verified repair.")
+        deploy_attempted = True
         deploy_receipt = runner(
             normalized["deploy_command"], cwd=normalized["cwd"],
             timeout=normalized["timeout_seconds"],
@@ -216,7 +252,7 @@ def run_verified_deployment(
                 verify_receipt, normalized["verify_command"]
             ),
         )
-        result["deployment_receipt_sha256"] = _hash_json(result)
+        _seal_deployment_receipt(result)
         try:
             # A terminal UI refresh failure must not erase a fully verified external outcome.
             progress(
@@ -232,7 +268,11 @@ def run_verified_deployment(
         # be allowed to interrupt it after a deploy was attempted.
         progress(
             "rolling_back",
-            "Live proof did not pass. Trace is restoring the prior bytes and rollback path.",
+            (
+                "Live proof did not pass. Trace is restoring the prior bytes and rollback path."
+                if deploy_attempted
+                else "Deployment did not start. Trace is restoring the prior local bytes."
+            ),
         )
     except Exception:
         pass
@@ -244,7 +284,7 @@ def run_verified_deployment(
         )
         if restore_receipt.get("restored") is not True:
             rollback_error = "The local source backup could not be restored."
-        else:
+        elif deploy_attempted:
             rollback_receipt = runner(
                 normalized["rollback_command"], cwd=normalized["cwd"],
                 timeout=normalized["timeout_seconds"],
@@ -261,14 +301,21 @@ def run_verified_deployment(
     except Exception as exc:
         rollback_error = f"Rollback execution failed: {type(exc).__name__}."
 
-    rollback_verified = rollback_error is None
+    rollback_verified = rollback_error is None and deploy_attempted
+    local_restore_verified = (
+        restore_receipt is not None and restore_receipt.get("restored") is True
+    )
     result.update(
         state=(
             "deployment_failed_rollback_verified"
             if rollback_verified else "deployment_failed_rollback_unverified"
+        ) if deploy_attempted else (
+            "deployment_not_attempted_restore_verified"
+            if local_restore_verified else "deployment_not_attempted_restore_unverified"
         ),
         error=failure,
-        rollback_attempted=True,
+        deploy_attempted=deploy_attempted,
+        rollback_attempted=deploy_attempted,
         rollback_verified=rollback_verified,
         rollback_error=rollback_error,
         deploy=_command_evidence(deploy_receipt, normalized["deploy_command"]),
@@ -289,14 +336,22 @@ def run_verified_deployment(
             rollback_verify_receipt, normalized["rollback_verify_command"]
         ),
     )
-    result["deployment_receipt_sha256"] = _hash_json(result)
+    _seal_deployment_receipt(result)
     try:
         progress(
-            "rollback_complete" if rollback_verified else "error",
+            (
+                "rollback_complete"
+                if rollback_verified or (not deploy_attempted and local_restore_verified)
+                else "error"
+            ),
             (
                 "The failed release was rolled back and the prior state was verified."
                 if rollback_verified
-                else "Deployment proof failed and the rollback could not be fully verified."
+                else (
+                    "Deployment was cancelled before it started; the prior local bytes were restored."
+                    if not deploy_attempted and local_restore_verified
+                    else "Deployment proof failed and the rollback could not be fully verified."
+                )
             ),
         )
     except Exception:

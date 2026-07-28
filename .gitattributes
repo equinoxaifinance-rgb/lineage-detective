@@ -1,0 +1,16 @@
+* text=auto
+
+# Runtime and release files must remain LF-clean when the public repository is
+# cloned on Windows and then built inside Linux.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf

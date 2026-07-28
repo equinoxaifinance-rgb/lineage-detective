@@ -21,6 +21,18 @@ from typing import Any
 
 from datahub_mcp import MCPDataHub
 from datahub_evidence import gather_upstream, NodeEvidence
+from network_policy import validate_network_url, validate_resolution
+from runtime_mode import is_public_judge
+
+HOSTED_JUDGE_GATEWAY = "https://lineage-detective-judge-gateway.equinoxaifinance.workers.dev"
+
+
+def _direct_provider_key() -> str | None:
+    """Expose a direct model credential only in explicit self-hosted mode."""
+    if is_public_judge():
+        return None
+    return os.environ.get("ANTHROPIC_API_KEY")
+
 
 SYSTEM = """You are Lineage Detective, a data-incident root-cause analyst.
 You are given (a) a symptom reported by a human and (b) REAL evidence gathered from a DataHub
@@ -73,7 +85,63 @@ def _extract_json_report(text: str) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _reason_over_evidence(llm, *, model: str, user: str) -> dict:
+def _validated_model_report(
+    report: dict | None, *, observed_urns: set[str]
+) -> dict | None:
+    """Return a bounded, evidence-grounded report or reject the whole model result."""
+    if not isinstance(report, dict):
+        return None
+    summary = report.get("summary")
+    suspects = report.get("suspects")
+    missing = report.get("missing_evidence")
+    if not isinstance(summary, str) or not summary.strip() or len(summary) > 4_000:
+        return None
+    if not isinstance(suspects, list) or len(suspects) > 3:
+        return None
+    if missing is not None and (
+        not isinstance(missing, str) or len(missing) > 2_000
+    ):
+        return None
+    clean_suspects: list[dict[str, Any]] = []
+    for suspect in suspects:
+        if not isinstance(suspect, dict):
+            return None
+        urn = suspect.get("urn")
+        why = suspect.get("why")
+        check_next = suspect.get("check_next")
+        owner = suspect.get("owner")
+        confidence = suspect.get("confidence")
+        if (
+            not isinstance(urn, str)
+            or urn not in observed_urns
+            or len(urn) > 2_048
+            or not isinstance(why, str)
+            or not why.strip()
+            or len(why) > 2_000
+            or not isinstance(check_next, str)
+            or not check_next.strip()
+            or len(check_next) > 2_000
+            or (owner is not None and (not isinstance(owner, str) or len(owner) > 500))
+            or confidence not in {"high", "medium", "low"}
+        ):
+            return None
+        clean_suspects.append({
+            "urn": urn,
+            "why": why.strip(),
+            "check_next": check_next.strip(),
+            "owner": owner.strip() if isinstance(owner, str) else None,
+            "confidence": confidence,
+        })
+    return {
+        "summary": summary.strip(),
+        "suspects": clean_suspects,
+        "missing_evidence": missing.strip() if isinstance(missing, str) else None,
+    }
+
+
+def _reason_over_evidence(
+    llm, *, model: str, user: str, observed_urns: set[str]
+) -> dict:
     """Make at most one corrective retry for a malformed structured response.
 
     The retry only asks for the same report in valid JSON; it does not add facts or change the
@@ -85,17 +153,22 @@ def _reason_over_evidence(llm, *, model: str, user: str) -> dict:
         resp = llm.messages.create(model=model, max_tokens=1500, system=SYSTEM, messages=messages)
         text = "".join(getattr(block, "text", "") for block in resp.content
                        if getattr(block, "type", None) == "text").strip()
-        report = _extract_json_report(text)
+        report = _validated_model_report(
+            _extract_json_report(text),
+            observed_urns=observed_urns,
+        )
         if report is not None:
             return report
         if attempt == 0:
             messages.append({"role": "user", "content": (
-                "Your last response was not parseable JSON. Return the same evidence-grounded report "
-                "again as one JSON object only, with exactly the required keys and no Markdown.")})
+                "Your last response failed the required JSON schema or referenced an entity outside "
+                "the supplied DataHub evidence. Return the same evidence-grounded report again as "
+                "one JSON object only, with exactly the required keys and no Markdown. Every suspect "
+                "URN must exactly match an evidence URN.")})
     return {
-        "summary": "The evidence was gathered, but the reasoning response could not be parsed as the required report.",
+        "summary": "The evidence was gathered, but the reasoning response failed schema or evidence-grounding validation.",
         "suspects": [],
-        "missing_evidence": "Retry the investigation; no containment or repair was performed from an unparseable response.",
+        "missing_evidence": "Retry the investigation; no containment or repair was performed from an invalid model response.",
     }
 
 
@@ -111,11 +184,27 @@ class _GatewayResponse:
         self.content = [_GatewayTextBlock(text)]
 
 
+class _RejectGatewayRedirects(urllib.request.HTTPRedirectHandler):
+    """Never forward the invitation credential to a redirected host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class _GatewayMessages:
     """Small Anthropic-compatible adapter that keeps the provider credential server-side."""
-    def __init__(self, endpoint: str, judge_code: str):
-        self.endpoint = endpoint.rstrip("/") + "/reason"
+    def __init__(self, endpoint: str, judge_code: str, *, hosted_mode: bool = False):
+        normalized = validate_network_url(
+            endpoint,
+            allow_private=not hosted_mode,
+            label="Judge gateway URL",
+        ).rstrip("/")
+        if hosted_mode and normalized != HOSTED_JUDGE_GATEWAY:
+            raise ValueError("The hosted app accepts only its release-bound judge gateway.")
+        self.base_endpoint = normalized
+        self.endpoint = normalized + "/reason"
         self.judge_code = judge_code
+        self.hosted_mode = hosted_mode
 
     def create(self, *, model: str, max_tokens: int, system: str = "", messages: list[dict]) -> _GatewayResponse:
         # Preserve the original evidence on the one allowed format-correction retry.  Sending
@@ -134,7 +223,13 @@ class _GatewayMessages:
                      "user-agent": "Lineage-Detective-Judge/1.0"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=45) as response:
+            validate_resolution(
+                self.endpoint,
+                allow_private=not self.hosted_mode,
+                label="Judge gateway URL",
+            )
+            opener = urllib.request.build_opener(_RejectGatewayRedirects())
+            with opener.open(request, timeout=45) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:400]
@@ -146,10 +241,55 @@ class _GatewayMessages:
             raise RuntimeError("Judge gateway returned no reasoning text.")
         return _GatewayResponse(text)
 
+    def preflight(self) -> dict[str, Any]:
+        """Verify the judge invitation and server-side bindings without model spend."""
+        endpoint = self.base_endpoint + "/preflight"
+        request = urllib.request.Request(
+            endpoint,
+            data=b"",
+            method="POST",
+            headers={
+                "x-lineage-judge-code": self.judge_code,
+                "user-agent": "Lineage-Detective-Judge/1.0",
+            },
+        )
+        try:
+            validate_resolution(
+                endpoint,
+                allow_private=not self.hosted_mode,
+                label="Judge gateway URL",
+            )
+            opener = urllib.request.build_opener(_RejectGatewayRedirects())
+            with opener.open(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:400]
+            raise RuntimeError(
+                f"Judge gateway preflight returned HTTP {exc.code}: {detail}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"Judge gateway preflight is unavailable: {exc}") from exc
+        if not isinstance(payload, dict) or payload.get("ready") is not True:
+            raise RuntimeError("Judge gateway preflight did not verify access.")
+        return {
+            "ready": True,
+            "access_expires": str(payload.get("access_expires") or ""),
+            "model": str(payload.get("model") or ""),
+            "daily_requests_remaining": int(payload.get("daily_requests_remaining") or 0),
+        }
+
 
 class _GatewayClient:
-    def __init__(self, endpoint: str, judge_code: str):
-        self.messages = _GatewayMessages(endpoint, judge_code)
+    def __init__(self, endpoint: str, judge_code: str, *, hosted_mode: bool = False):
+        self.messages = _GatewayMessages(endpoint, judge_code, hosted_mode=hosted_mode)
+
+
+def preflight_judge_gateway(
+    endpoint: str, judge_code: str, *, hosted_mode: bool = False
+) -> dict[str, Any]:
+    return _GatewayMessages(
+        endpoint, judge_code, hosted_mode=hosted_mode
+    ).preflight()
 
 
 def _evidence_block(nodes: list[NodeEvidence]) -> str:
@@ -291,7 +431,7 @@ def investigate(symptom: str, affected_urn: str, *, server: str, token: str | No
         requested_mode = reasoning_mode.lower()
         if requested_mode not in {"auto", "model", "evidence"}:
             raise ValueError("reasoning_mode must be auto, model, or evidence")
-        provider_key = os.environ.get("ANTHROPIC_API_KEY")
+        provider_key = _direct_provider_key()
         reasoning_endpoint = reasoning_endpoint or os.environ.get("LINEAGE_REASONING_ENDPOINT")
         judge_code = judge_code or os.environ.get("LINEAGE_JUDGE_CODE")
         gateway_available = bool(reasoning_endpoint and judge_code)
@@ -303,13 +443,22 @@ def investigate(symptom: str, affected_urn: str, *, server: str, token: str | No
                 llm = Anthropic(api_key=provider_key)
                 report_mode = "model_backed_local_secret"
             elif gateway_available:
-                llm = _GatewayClient(str(reasoning_endpoint), str(judge_code))
+                llm = _GatewayClient(
+                    str(reasoning_endpoint),
+                    str(judge_code),
+                    hosted_mode=is_public_judge(),
+                )
                 report_mode = "model_backed_judge_gateway"
             else:
                 raise RuntimeError("Model-backed mode requires a local provider key or configured judge gateway.")
             user = (f"SYMPTOM: {symptom}\n\nAFFECTED ENTITY: {affected_urn}\n\n"
                     f"UPSTREAM EVIDENCE FROM DATAHUB ({len(evidence)} nodes):\n{_evidence_block(evidence)}")
-            report = _reason_over_evidence(llm, model=model, user=user)
+            report = _reason_over_evidence(
+                llm,
+                model=model,
+                user=user,
+                observed_urns={node.urn for node in evidence} | {affected_urn},
+            )
             report["reasoning_mode"] = report_mode
         else:
             progress("reasoning", "No model key is present; applying deterministic checks to the live DataHub evidence...")

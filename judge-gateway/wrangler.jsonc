@@ -3,7 +3,8 @@
   "main": "src/index.js",
   "compatibility_date": "2026-07-26",
   "vars": {
-    "JUDGE_DAILY_REQUEST_CAP": "200"
+    "JUDGE_DAILY_REQUEST_CAP": "200",
+    "JUDGE_ACCESS_EXPIRES": "2026-09-15T23:59:59Z"
   },
   "durable_objects": {
     "bindings": [

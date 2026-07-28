@@ -12,6 +12,7 @@ const MAX_USER_CHARS = 42_000;
 const MAX_OUTPUT_TOKENS = 1_500;
 const MODEL = "claude-sonnet-5";
 const DEFAULT_DAILY_REQUEST_CAP = 200;
+const DEFAULT_ACCESS_EXPIRES = "2026-09-15T23:59:59Z";
 
 function cors() {
   // A judge runs the app locally, so the origin is not known in advance. The access code,
@@ -38,6 +39,15 @@ function validOptionalText(value, max) {
   return value === undefined || (typeof value === "string" && value.length <= max);
 }
 
+function accessWindow(env, now = new Date()) {
+  const configured = env.JUDGE_ACCESS_EXPIRES || DEFAULT_ACCESS_EXPIRES;
+  const expiresAt = new Date(configured);
+  if (Number.isNaN(expiresAt.getTime())) {
+    return { configured, valid: false, expired: true };
+  }
+  return { configured: expiresAt.toISOString(), valid: true, expired: now >= expiresAt };
+}
+
 /**
  * A strongly consistent shared request ledger. Cloudflare's rate-limit binding
  * throttles per IP at the edge; this Durable Object additionally enforces a
@@ -52,6 +62,9 @@ export class JudgeBudget {
   async fetch(request) {
     const cap = Math.max(1, Number(new URL(request.url).searchParams.get("cap")) || DEFAULT_DAILY_REQUEST_CAP);
     const used = (await this.state.storage.get("used")) || 0;
+    if (new URL(request.url).pathname === "/status") {
+      return Response.json({ allowed: used < cap, used, remaining: Math.max(0, cap - used) });
+    }
     if (used >= cap) {
       return Response.json({ allowed: false, remaining: 0, retry_after: "next UTC day" });
     }
@@ -66,40 +79,85 @@ export default {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors() });
     if (url.pathname === "/health" && request.method === "GET") {
-      return reply(200, { status: "ok", service: "lineage-detective-judge-gateway" });
+      const window = accessWindow(env);
+      return reply(window.valid ? 200 : 503, {
+        status: window.valid ? "ok" : "misconfigured",
+        service: "lineage-detective-judge-gateway",
+        access_expires: window.configured,
+        access_active: window.valid && !window.expired,
+        model: MODEL,
+      });
     }
-    if (url.pathname !== "/reason" || request.method !== "POST") {
+    if (!["/reason", "/preflight"].includes(url.pathname) || request.method !== "POST") {
       return reply(404, { error: "not_found" });
+    }
+    const window = accessWindow(env);
+    if (!window.valid) {
+      return reply(503, { error: "judge_access_window_misconfigured", retryable: false });
+    }
+    if (window.expired) {
+      return reply(410, { error: "judge_access_expired", retryable: false });
+    }
+    const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
+    const authLimited = await env.JUDGE_RATE.limit({ key: `${clientIp}:judge-auth-attempt` });
+    if (!authLimited.success) {
+      return reply(429, { error: "judge_auth_rate_limited", retryable: true });
     }
     const suppliedCode = request.headers.get("x-lineage-judge-code") || "";
     if (!env.JUDGE_CODE || suppliedCode !== env.JUDGE_CODE) {
       return reply(401, { error: "judge_access_required" });
     }
-    const clientIp = request.headers.get("CF-Connecting-IP") || "unknown";
-    const limited = await env.JUDGE_RATE.limit({ key: `${clientIp}:${suppliedCode}` });
-    if (!limited.success) {
-      return reply(429, { error: "judge_rate_limited", retryable: true });
+    if (!env.ANTHROPIC_API_KEY || !env.JUDGE_BUDGET) {
+      return reply(503, { error: "reasoning_service_not_configured", retryable: false });
     }
     const day = new Date().toISOString().slice(0, 10);
     const dailyCap = Math.max(1, Number(env.JUDGE_DAILY_REQUEST_CAP) || DEFAULT_DAILY_REQUEST_CAP);
     const budgetStub = env.JUDGE_BUDGET.getByName(`daily-${day}`);
-    const budget = await (await budgetStub.fetch(`https://judge-budget/consume?cap=${dailyCap}`)).json();
-    if (!budget.allowed) {
-      return reply(429, { error: "judge_daily_cap_reached", retryable: true, retry_after: budget.retry_after });
+    if (url.pathname === "/preflight") {
+      const budget = await (
+        await budgetStub.fetch(`https://judge-budget/status?cap=${dailyCap}`)
+      ).json();
+      if (!budget.allowed) {
+        return reply(429, {
+          error: "judge_daily_cap_reached",
+          retryable: true,
+          retry_after: "next UTC day",
+        });
+      }
+      return reply(200, {
+        ready: true,
+        access_expires: window.configured,
+        model: MODEL,
+        daily_requests_remaining: budget.remaining,
+      });
+    }
+    const limited = await env.JUDGE_RATE.limit({ key: `${clientIp}:judge-reasoning` });
+    if (!limited.success) {
+      return reply(429, { error: "judge_rate_limited", retryable: true });
     }
     const length = Number(request.headers.get("content-length") || "0");
     if (length > MAX_BODY_BYTES) return reply(413, { error: "request_too_large" });
+    let rawBody;
+    try {
+      rawBody = new Uint8Array(await request.arrayBuffer());
+    } catch {
+      return reply(400, { error: "invalid_request_body" });
+    }
+    if (rawBody.byteLength > MAX_BODY_BYTES) {
+      return reply(413, { error: "request_too_large" });
+    }
     let body;
     try {
-      body = await request.json();
+      body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(rawBody));
     } catch {
       return reply(400, { error: "invalid_json" });
     }
     if (!validOptionalText(body?.system, MAX_SYSTEM_CHARS) || !validText(body?.user, MAX_USER_CHARS)) {
       return reply(400, { error: "invalid_reasoning_request" });
     }
-    if (!env.ANTHROPIC_API_KEY) {
-      return reply(503, { error: "reasoning_service_not_configured", retryable: false });
+    const budget = await (await budgetStub.fetch(`https://judge-budget/consume?cap=${dailyCap}`)).json();
+    if (!budget.allowed) {
+      return reply(429, { error: "judge_daily_cap_reached", retryable: true, retry_after: budget.retry_after });
     }
     const upstream = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

@@ -20,10 +20,14 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import streamlit as st
-from agent import investigate  # noqa: E402
+from agent import investigate, preflight_judge_gateway  # noqa: E402
 from autonomous_workflow import run_approved_workflow  # noqa: E402
 from datahub_mcp import MCPDataHub  # noqa: E402
 from datahub_oauth import DATAHUB_GLOBAL_MCP, authorize_datahub  # noqa: E402
+from deployment_workflow import (  # noqa: E402
+    verify_deployment_receipt,
+    verify_deployment_receipt_integrity,
+)
 from repair import (  # noqa: E402
     BROKEN_SQL,
     apply_verified_repair,
@@ -43,12 +47,18 @@ from remediation_connectors import (  # noqa: E402
     failure_receipt,
     run_project_validation,
 )
+from runtime_mode import (  # noqa: E402
+    is_bundled_catalog_url,
+    is_public_judge,
+    is_self_hosted,
+)
 from setup_vocab import ensure_incident_vocabulary  # noqa: E402
 
 MASCOT = Path(__file__).with_name("assets") / "lineage-detective-mascot.png"
 DROID_NAME = "Trace"
 DEFAULT_JUDGE_ENDPOINT = "https://lineage-detective-judge-gateway.equinoxaifinance.workers.dev"
 _VOCAB_READY_SUCCESSES: set[tuple[str, str]] = set()
+_HOSTED_CATALOG_READY_SUCCESSES: set[str] = set()
 _WORKFLOW_RESULT_KEYS = (
     "report",
     "repair_receipt",
@@ -59,6 +69,8 @@ _WORKFLOW_RESULT_KEYS = (
     "autonomous_workflow_result",
     "autonomous_workflow_error",
 )
+PUBLIC_JUDGE_MODE = is_public_judge()
+SELF_HOSTED_MODE = is_self_hosted()
 
 
 class WorkflowCancelled(RuntimeError):
@@ -85,6 +97,78 @@ def _local_catalog_preflight(server_url: str, timeout: float = 2.0) -> tuple[boo
         )
 
 
+def _hosted_catalog_preflight(
+    *,
+    server_url: str,
+    mcp_url: str,
+    token: str,
+    default_urn: str,
+) -> tuple[bool, str | None]:
+    """Prove the fixed contest catalog and required MCP surface without exposing its token."""
+    bundled_catalog = is_bundled_catalog_url(server_url)
+    if not server_url or not default_urn:
+        return False, "The server-side contest catalog configuration is incomplete."
+    if not bundled_catalog and (not mcp_url or not token):
+        return False, "The server-side contest catalog configuration is incomplete."
+    fingerprint = hashlib.sha256(
+        f"{server_url}\0{mcp_url}\0{token}\0{default_urn}".encode("utf-8")
+    ).hexdigest()
+    if fingerprint in _HOSTED_CATALOG_READY_SUCCESSES:
+        return True, None
+    required_tools = {
+        "search",
+        "get_lineage",
+        "get_entities",
+        "add_tags",
+        "remove_tags",
+    }
+    probe_urn = (
+        "urn:li:dataset:(urn:li:dataPlatform:datahub,"
+        "lineage_detective.release_probe,PROD)"
+    )
+    probe_tag = "urn:li:tag:QUARANTINE_INCIDENT"
+    try:
+        with MCPDataHub(
+            server_url,
+            token=token or None,
+            mcp_url=mcp_url or None,
+            enable_mutations=True,
+            startup_timeout=20,
+            tool_timeout=20,
+        ) as catalog:
+            search_results = catalog.search("customer", num_results=3)
+            if not search_results:
+                return False, "The contest catalog search proof returned no live assets."
+            entities = catalog.get_entities([default_urn, probe_urn])
+            if default_urn not in entities:
+                return False, "The guaranteed judge incident asset was not found in live DataHub."
+            if probe_urn not in entities:
+                return False, "The reversible release-probe asset was not found in live DataHub."
+            lineage = catalog.get_lineage(default_urn, upstream=True, max_hops=3)
+            if not lineage:
+                return False, "The guaranteed judge incident has no live upstream lineage."
+            add_readback = False
+            remove_readback = False
+            try:
+                add_readback = catalog.add_tag(probe_urn, probe_tag)
+            finally:
+                # Cleanup is attempted even if add/readback raises, so a
+                # preflight cannot leave its reversible marker behind.
+                remove_readback = catalog.remove_tag(probe_urn, probe_tag)
+            if not (add_readback and remove_readback):
+                return False, "The reversible DataHub mutation proof did not round-trip."
+            missing = required_tools - catalog.tools
+            if missing:
+                return False, (
+                    "Contest DataHub MCP did not execute required tools: "
+                    f"{sorted(missing)}"
+                )
+    except Exception as exc:
+        return False, f"Contest DataHub preflight failed: {type(exc).__name__}."
+    _HOSTED_CATALOG_READY_SUCCESSES.add(fingerprint)
+    return True, None
+
+
 def _vocab_ready(server_url: str, token: str | None) -> str:
     """Cache only successful vocabulary setup; a transient failure must remain retryable."""
     credential_scope = hashlib.sha256((token or "").encode("utf-8")).hexdigest()
@@ -99,7 +183,12 @@ def _vocab_ready(server_url: str, token: str | None) -> str:
         return f"skipped ({type(exc).__name__})"
 
 
-st.set_page_config(page_title="Lineage Detective", page_icon=str(MASCOT), layout="centered")
+st.set_page_config(
+    page_title="Lineage Detective",
+    page_icon=str(MASCOT),
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
 
 _CONF = {"high": ("#7f1d1d", "#fca5a5", "HIGH"),
          "medium": ("#78350f", "#fcd34d", "MEDIUM"),
@@ -232,6 +321,7 @@ def _workflow_html(phase: str, detail: str | None = None) -> str:
         "sandbox_verify": 88,
         "sandbox_rollback": 94,
         "sandbox_complete": 97,
+        "sandbox_failed": 97,
         "verified": 97,
         "handoff": 100,
         "complete": 100,
@@ -248,6 +338,7 @@ def _workflow_html(phase: str, detail: str | None = None) -> str:
         "sandbox_verify": ("Rebuilding and checking the assertion", "The repaired result must pass the real check."),
         "sandbox_rollback": ("Restoring and verifying rollback", "The original bytes must return before the receipt can pass."),
         "sandbox_complete": ("Binding the verification receipt", "Hashes, assertions, and rollback evidence are being sealed."),
+        "sandbox_failed": ("Sandbox verification stopped", "No rewrite was marked verified; inspect the exact receipt and retry after correction."),
         "sandbox": ("Sandbox verification passed", "The approved diff and rollback earned a verified receipt."),
         "handoff": ("Verified workflow complete", "The exact repair, implementation proof, and human handoff are ready."),
         "complete": ("Verified workflow complete", "The exact repair, implementation proof, and human handoff are ready."),
@@ -262,7 +353,7 @@ def _workflow_html(phase: str, detail: str | None = None) -> str:
     )
     state_class = (
         "ld-workflow-error"
-        if phase == "error"
+        if phase in {"error", "sandbox_failed"}
         else ("ld-workflow-complete" if progress == 100 else "ld-workflow-active")
     )
     return f"""
@@ -497,7 +588,7 @@ def _render_external_remediation(repair: dict, receipt: dict, *, server_url: str
             "Execute one Snowflake statement",
             "Create a DataHub prevention assertion",
         )
-        if os.environ.get("HOSTED_MODE") != "1":
+        if SELF_HOSTED_MODE:
             connector_targets = ("Run this repository's tests",) + connector_targets
         target = st.selectbox(
             "Implementation target",
@@ -505,7 +596,7 @@ def _render_external_remediation(repair: dict, receipt: dict, *, server_url: str
             key=f"connector-target-{repair_id}",
         )
         result = None
-        transport = JsonTransport(allow_private=os.environ.get("HOSTED_MODE") != "1")
+        transport = JsonTransport(allow_private=SELF_HOSTED_MODE)
         try:
             if target == "Run this repository's tests":
                 root = st.text_input(
@@ -552,7 +643,8 @@ def _render_external_remediation(repair: dict, receipt: dict, *, server_url: str
                             "Evidence-bound repair generated by Lineage Detective.\n\n"
                             f"Sandbox receipt: `{receipt.get('receipt_sha256')}`"
                         ),
-                        expected_source_sha256=str(receipt.get("proposal_sha256") or ""),
+                        expected_before_sha256=str(receipt.get("source_sha256") or ""),
+                        expected_proposal_sha256=str(receipt.get("proposal_sha256") or ""),
                     )
 
             elif target == "Trigger a dbt Cloud job":
@@ -724,10 +816,15 @@ def _render_external_remediation(repair: dict, receipt: dict, *, server_url: str
                     f"{connector_receipt.get('connector', target)} action was read back or returned "
                     "a target-system identifier."
                 )
+            elif connector_receipt.get("applied"):
+                st.warning(
+                    "The target accepted or may retain this action, but independent readback did "
+                    "not complete. Inspect the external ID in the receipt before retrying."
+                )
             else:
                 st.error(
-                    connector_receipt.get("error")
-                    or "The target system did not provide enough evidence to verify this action."
+                    "The target system did not provide enough evidence to verify this action. "
+                    f"Error class: {connector_receipt.get('error_type', 'unverified_result')}."
                 )
             st.download_button(
                 "Download connector receipt",
@@ -748,6 +845,23 @@ def _run_autonomous_followthrough(
     """Complete the verified repair path after the user's single up-front approval."""
     _check_workflow_cancelled()
     repair = report.get("repair") or {}
+    if repair.get("state") == "no_change_required":
+        _render_detective(
+            workflow_slot,
+            "complete",
+            "The current SQL already matches the evidence-bound correction. No file was changed.",
+        )
+        st.success(
+            "Second-run safety check: the current SQL already matches the proposed correction, "
+            "so Trace made no duplicate edit. Downstream health remains a separate live check."
+        )
+        result = {
+            "state": "investigation_complete_no_change",
+            "verified": True,
+            "no_change_required": True,
+        }
+        st.session_state["autonomous_workflow_result"] = result
+        return result
     if repair.get("state") != "approval_required":
         st.info(
             "The investigation completed, but this incident did not produce a safe code change. "
@@ -765,7 +879,10 @@ def _run_autonomous_followthrough(
     target_file = None
     if finish_mode == "Prove safe write + prepare handoff":
         target_file = str(_ensure_demo_apply_target(repair))
-    elif finish_mode == "Apply to selected SQL + prepare handoff":
+    elif finish_mode in {
+        "Apply to selected SQL + prepare handoff",
+        "Apply to uploaded session copy + prepare handoff",
+    }:
         candidate = Path(str(repair.get("source_path") or "")).expanduser()
         if candidate.is_symlink() or not candidate.is_file() or candidate.suffix.lower() != ".sql":
             raise OSError(
@@ -796,11 +913,15 @@ def _run_autonomous_followthrough(
         report,
         approval="one-click-ui-full-workflow",
         apply_target=target_file,
+        apply_allowed_root=(
+            str(_demo_apply_root())
+            if PUBLIC_JUDGE_MODE
+            else None
+        ),
         on_progress=show_progress,
         deployment_profile=deployment_profile,
-        allow_local_deployment=os.environ.get("HOSTED_MODE") != "1",
+        allow_local_deployment=SELF_HOSTED_MODE,
     )
-    _check_workflow_cancelled()
     receipt = result.get("repair_receipt")
     if receipt is not None:
         st.session_state["repair_receipt"] = receipt
@@ -813,6 +934,8 @@ def _run_autonomous_followthrough(
     handoff = result.get("handoff_packet")
     if handoff is not None:
         st.session_state["handoff_packet"] = handoff
+    # Preserve a terminal downstream receipt before honoring a late UI cancellation.
+    _check_workflow_cancelled()
 
     if result.get("verified"):
         st.session_state["autonomous_workflow_result"] = {
@@ -913,6 +1036,11 @@ def _render_repair(report: dict, detective_slot, workflow_slot) -> None:
         existing_receipt.get("verified")
         and existing_receipt.get("repair_id") == repair.get("repair_id")
     )
+    failed_receipt_is_current = bool(
+        existing_receipt.get("attempted")
+        and not existing_receipt.get("verified")
+        and existing_receipt.get("repair_id") == repair.get("repair_id")
+    )
     autonomous_result = st.session_state.get("autonomous_workflow_result") or {}
     autonomous_is_current = bool(
         autonomous_result.get("verified")
@@ -922,6 +1050,11 @@ def _render_repair(report: dict, detective_slot, workflow_slot) -> None:
         workflow_slot.markdown(_workflow_html("handoff"), unsafe_allow_html=True)
     elif receipt_is_current:
         workflow_slot.markdown(_workflow_html("sandbox"), unsafe_allow_html=True)
+    elif failed_receipt_is_current:
+        workflow_slot.markdown(
+            _workflow_html("sandbox_failed", detail=existing_receipt.get("error")),
+            unsafe_allow_html=True,
+        )
     else:
         workflow_slot.markdown(_workflow_html("review"), unsafe_allow_html=True)
     if autonomous_is_current:
@@ -1155,12 +1288,18 @@ def _render_repair(report: dict, detective_slot, workflow_slot) -> None:
             deployment_receipt = st.session_state.get("deployment_receipt")
             if deployment_receipt:
                 st.subheader("5 · Live deployment receipt")
-                if deployment_receipt.get("verified"):
+                deployment_valid, deployment_reason = verify_deployment_receipt(
+                    deployment_receipt
+                )
+                deployment_integrity, integrity_reason = (
+                    verify_deployment_receipt_integrity(deployment_receipt)
+                )
+                if deployment_valid:
                     st.success(
                         "The exact verified repair was deployed and a separate downstream health "
                         "check confirmed the live result."
                     )
-                elif deployment_receipt.get("rollback_verified"):
+                elif deployment_integrity and deployment_receipt.get("rollback_verified"):
                     st.warning(
                         "The live health check did not pass. Trace restored the prior source, ran "
                         "the rollback path, and independently verified the prior state."
@@ -1169,15 +1308,19 @@ def _render_repair(report: dict, detective_slot, workflow_slot) -> None:
                     st.error(
                         deployment_receipt.get("rollback_error")
                         or deployment_receipt.get("error")
-                        or "Deployment and rollback were not fully verified."
+                        or integrity_reason
+                        or deployment_reason
                     )
-                st.download_button(
-                    "Download deployment receipt",
-                    receipt_for_display(deployment_receipt),
-                    file_name="lineage-detective-deployment-receipt.json",
-                    mime="application/json",
-                    key=f"deployment-receipt-{repair.get('repair_id', 'current')}",
-                )
+                if deployment_integrity and (
+                    deployment_valid or deployment_receipt.get("rollback_verified")
+                ):
+                    st.download_button(
+                        "Download deployment receipt",
+                        receipt_for_display(deployment_receipt),
+                        file_name="lineage-detective-deployment-receipt.json",
+                        mime="application/json",
+                        key=f"deployment-receipt-{repair.get('repair_id', 'current')}",
+                    )
             handoff = st.session_state.get("handoff_packet")
             if handoff:
                 st.subheader("4 · Verified human handoff")
@@ -1187,12 +1330,18 @@ def _render_repair(report: dict, detective_slot, workflow_slot) -> None:
                     file_name="lineage-detective-human-handoff.zip", mime="application/zip",
                     key=f"handoff-download-{repair.get('repair_id', 'current')}",
                 )
-            _render_external_remediation(
-                repair,
-                receipt,
-                server_url=server,
-                server_token=token or "",
-            )
+            if SELF_HOSTED_MODE:
+                _render_external_remediation(
+                    repair,
+                    receipt,
+                    server_url=server,
+                    server_token=token or "",
+                )
+            else:
+                st.info(
+                    "Production connectors are intentionally self-hosted. The public judge app "
+                    "never asks for GitHub, warehouse, orchestrator, or customer DataHub secrets."
+                )
         else:
             st.error(receipt.get("error") or "Sandbox trial did not verify. No production claim is made.")
         st.download_button("Download JSON receipt", receipt_for_display(receipt),
@@ -1202,49 +1351,87 @@ def _render_repair(report: dict, detective_slot, workflow_slot) -> None:
 
 
 st.markdown(_title_html(), unsafe_allow_html=True)
-st.markdown(
-    "<div style='background:#0b1220;border:1px solid #1e293b;border-radius:8px;padding:9px 12px;"
-    "margin:-4px 0 12px;color:#bfdbfe;font-size:.9rem'><b>Truth boundary:</b> DataHub MCP supplies "
-    "lineage and metadata; model-backed mode reasons over it, while no-key judge mode applies disclosed "
-    "deterministic checks. Confirmed incidents can be contained only from the model-backed lane. "
-    "For any asset, Trace can investigate lineage and verify catalog containment. If the affected "
-    "dbt SQL file is available to this host, Trace can also draft a constrained patch; a proposed "
-    "change runs in isolation first. Autonomous mode treats its clearly labeled start button as "
-    "approval for the displayed full scope; manual mode pauses at each stage. After verification, "
-    "a self-hosted customer can run one approved path through exact write, deployment, independent "
-    "live readback, and automatic verified rollback. Individual GitHub, dbt Cloud, Airflow, "
-    "Fivetran, Snowflake, and DataHub assertion connectors remain available for governed actions.</div>",
-    unsafe_allow_html=True)
+st.caption(
+    "Live DataHub evidence → constrained diagnosis → verified repair → receipt-backed handoff."
+)
+with st.expander("How Lineage Detective earns trust"):
+    st.markdown(
+        "**DataHub MCP supplies every lineage and metadata fact.** Model-backed mode reasons only "
+        "over those observed entities; no-key mode uses disclosed deterministic checks and remains "
+        "read-only. Catalog writes are read back before confirmation. Repair proposals run in an "
+        "isolated sandbox before exact-byte apply, and self-hosted deployments require a separate "
+        "live check with verified rollback on failure."
+    )
+    st.markdown(
+        "- **Judge lane:** six-hop live catalog traversal, bounded model reasoning, confirmed "
+        "containment, sandbox proof, safe exact-byte apply, and a hash-bound handoff—without "
+        "exposing provider or DataHub credentials.\n"
+        "- **Customer lane:** the same verified bytes can continue into the team's checked-out "
+        "project, scoped deploy command, independent downstream health check, and automatic "
+        "rollback with readback when health fails.\n"
+        "- **Second run:** an already-correct file becomes a verified no-change result; Trace "
+        "does not stack the same patch twice."
+    )
+    st.caption(
+        "Manual mode pauses for each decision. Autonomous mode treats its clearly labeled start "
+        "button as approval only for the scope displayed on this page."
+    )
 
 with st.sidebar:
     st.header("Connection")
-    connection_mode = st.selectbox(
-        "DataHub connection",
-        ("Local / self-hosted MCP", "DataHub Cloud managed MCP"),
-        index=1 if os.environ.get("HOSTED_MODE") == "1" else 0,
-        help=(
-            "The managed Cloud path uses DataHub's streamable-HTTP MCP endpoint directly. "
-            "For an unattended agent, DataHub recommends a scoped service-account token."
-        ),
-    )
-    if connection_mode == "DataHub Cloud managed MCP":
+    if PUBLIC_JUDGE_MODE:
+        st.caption("Contest tenant · credentials stay server-side")
+        connection_mode = "DataHub Cloud managed MCP"
+        server = os.environ.get("DATAHUB_SERVER", "").strip()
+        token = os.environ.get("DATAHUB_GMS_TOKEN", "").strip()
+        mcp_url = os.environ.get("DATAHUB_MCP_URL", "").strip()
+        bundled_catalog = is_bundled_catalog_url(server)
+        if server and not mcp_url and not bundled_catalog:
+            mcp_url = f"{server.rstrip('/')}/integrations/ai/mcp/"
+        if server and (bundled_catalog or (mcp_url and token)):
+            catalog_preflight_ready, catalog_preflight_error = _hosted_catalog_preflight(
+                server_url=server,
+                mcp_url=mcp_url,
+                token=token,
+                default_urn=EXAMPLES[REPAIR_EXAMPLE][1],
+            )
+            if catalog_preflight_ready:
+                st.success("Live contest DataHub catalog verified server-side.")
+            else:
+                st.error(catalog_preflight_error)
+        else:
+            catalog_preflight_ready = False
+            st.error(
+                "The contest DataHub connection is not configured. No DataHub credential is "
+                "requested from the judge, and no fallback data is substituted."
+            )
+    else:
+        catalog_preflight_ready = True
+        connection_mode = st.selectbox(
+            "DataHub connection",
+            ("Local / self-hosted MCP", "DataHub Cloud managed MCP"),
+            index=0,
+            help=(
+                "The managed Cloud path uses DataHub's streamable-HTTP MCP endpoint directly. "
+                "For an unattended agent, DataHub recommends a scoped service-account token."
+            ),
+        )
+    if SELF_HOSTED_MODE and connection_mode == "DataHub Cloud managed MCP":
         server = st.text_input(
             "DataHub Cloud tenant URL",
             value=os.environ.get("DATAHUB_SERVER", ""),
             placeholder="https://tenant.acryl.io",
         ).strip()
-        hosted = os.environ.get("HOSTED_MODE") == "1"
         auth_mode = "Service-account token"
-        if not hosted:
-            auth_mode = st.radio(
-                "Authentication",
-                ("Service-account token", "Sign in with DataHub OAuth"),
-                horizontal=True,
-                help=(
-                    "OAuth opens DataHub in your browser and returns to a temporary loopback "
-                    "callback. It is available only when Lineage Detective runs locally."
-                ),
-            )
+        auth_mode = st.radio(
+            "Authentication",
+            ("Service-account token", "Sign in with DataHub OAuth"),
+            horizontal=True,
+            help=(
+                "OAuth opens DataHub in your browser and returns to a temporary loopback "
+                "callback. It is available only when Lineage Detective runs locally."
+            ),
+        )
         if auth_mode == "Sign in with DataHub OAuth":
             if st.button("Connect DataHub in browser", width="stretch"):
                 with st.spinner("Waiting for DataHub sign-in..."):
@@ -1267,31 +1454,79 @@ with st.sidebar:
                 or (f"{server.rstrip('/')}/integrations/ai/mcp/" if server else "")
             )
         st.caption(f"Managed MCP endpoint: `{mcp_url or 'enter the tenant URL'}`")
-    else:
+    elif SELF_HOSTED_MODE:
         server = st.text_input(
             "DataHub server", value=os.environ.get("DATAHUB_SERVER", "http://localhost:8080")
         ).strip()
         mcp_url = ""
         token = st.text_input("DataHub token (optional for local DataHub)", type="password")
     max_hops = st.slider("Max upstream hops", 1, 6, 3)
-    local_model_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    # Public judge mode must never silently change trust topology because a
+    # provider key happened to be present in the container environment.
+    local_model_key = SELF_HOSTED_MODE and bool(os.environ.get("ANTHROPIC_API_KEY"))
     judge_endpoint_default = os.environ.get("LINEAGE_REASONING_ENDPOINT", DEFAULT_JUDGE_ENDPOINT)
-    judge_endpoint = st.text_input(
-        "Judge model gateway URL (optional)", value=judge_endpoint_default,
-        placeholder="https://lineage-detective-judge-gateway.<account>.workers.dev",
-        help="This is a server-side relay. It does not reveal or store the provider API key in this app.",
-    ).strip()
-    judge_code = st.text_input(
-        "Judge access code (optional)", type="password",
-        help="Provided with the judge instructions. It authorizes the bounded server-side model relay; it is not a provider API key.",
-    ).strip()
-    gateway_model = bool(judge_endpoint and judge_code)
-    model_available = local_model_key or gateway_model
+    hosted_gateway = PUBLIC_JUDGE_MODE
+    judge_lane_available = SELF_HOSTED_MODE or catalog_preflight_ready
+    if hosted_gateway and not judge_lane_available:
+        judge_endpoint = judge_endpoint_default
+        judge_code = ""
+        st.error(
+            "Judge lane unavailable: the live contest DataHub catalog is not connected. "
+            "The access code cannot unlock the workflow until that backend passes preflight."
+        )
+    else:
+        judge_endpoint = st.text_input(
+            "Judge model gateway URL" if hosted_gateway else "Judge model gateway URL (optional)",
+            value=judge_endpoint_default,
+            placeholder="https://lineage-detective-judge-gateway.<account>.workers.dev",
+            help="This is a server-side relay. It does not reveal or store the provider API key in this app.",
+            disabled=hosted_gateway,
+        ).strip()
+        judge_code = st.text_input(
+            "Judge access code (from testing instructions)" if hosted_gateway else "Judge access code (optional)",
+            type="password",
+            help="Provided with the judge instructions. It authorizes the bounded server-side model relay; it is not a provider API key.",
+        ).strip()
+    gateway_model = bool(judge_lane_available and judge_endpoint and judge_code)
+    gateway_ready = False
+    if gateway_model:
+        gateway_fingerprint = hashlib.sha256(
+            f"{judge_endpoint}\0{judge_code}".encode("utf-8")
+        ).hexdigest()
+        if st.session_state.get("judge_gateway_fingerprint") != gateway_fingerprint:
+            try:
+                st.session_state["judge_gateway_preflight"] = preflight_judge_gateway(
+                    judge_endpoint,
+                    judge_code,
+                    hosted_mode=hosted_gateway,
+                )
+                st.session_state["judge_gateway_preflight_error"] = None
+            except Exception as exc:
+                st.session_state["judge_gateway_preflight"] = None
+                st.session_state["judge_gateway_preflight_error"] = type(exc).__name__
+            st.session_state["judge_gateway_fingerprint"] = gateway_fingerprint
+        gateway_ready = bool(
+            (st.session_state.get("judge_gateway_preflight") or {}).get("ready")
+        )
+    else:
+        st.session_state.pop("judge_gateway_fingerprint", None)
+        st.session_state.pop("judge_gateway_preflight", None)
+        st.session_state.pop("judge_gateway_preflight_error", None)
+    model_available = local_model_key or gateway_ready
     if local_model_key:
         st.success("Model-backed reasoning available with this process's private server key.")
+    elif gateway_ready:
+        preflight = st.session_state["judge_gateway_preflight"]
+        st.success(
+            "Model-backed judge gateway verified. The provider key remains server-side. "
+            f"Access window: {preflight.get('access_expires')}."
+        )
     elif gateway_model:
-        st.success("Model-backed judge gateway ready. The provider key remains server-side.")
-    else:
+        st.error(
+            "Judge access was entered but did not pass the server-side preflight. "
+            "Check the code and retry."
+        )
+    elif judge_lane_available:
         st.info(
             "Evidence-only mode: real DataHub MCP evidence + deterministic checks. The bounded "
             "judge gateway URL is preloaded; enter the supplied judge access code for full "
@@ -1300,7 +1535,19 @@ with st.sidebar:
     contain = st.checkbox("Contain the confirmed incident in DataHub", value=model_available,
                           disabled=not model_available,
                           help="Model-backed default: writes quarantine/impact tags through MCP and reads them back to confirm. You may uncheck it for a read-only model-backed investigation. Evidence-only judge mode is always read-only.")
-    st.caption("No token is stored by this app. A private cloud tenant may require one.")
+    if PUBLIC_JUDGE_MODE and catalog_preflight_ready:
+        st.caption(
+            "The scoped catalog credential stays server-side and is never sent to your browser."
+        )
+    elif PUBLIC_JUDGE_MODE:
+        st.caption(
+            "No DataHub credential is requested from the judge; the workflow remains disabled "
+            "until the server-side catalog is restored."
+        )
+    else:
+        st.caption(
+            "Any DataHub token you enter is held only in this active process/session."
+        )
 
     if "incident_example" not in st.session_state:
         _load_full_repair_example()
@@ -1383,31 +1630,69 @@ affected = st.text_input("Affected asset URN", key="incident_asset")
 
 repair_artifact = None
 with st.expander("Optional: give Trace the real dbt SQL file to repair", expanded=False):
-    st.caption(
-        "Use this when the likely fault is in a checked-out dbt model or singular test available "
-        "on the machine running Lineage Detective. Trace reads it for this run only."
-    )
-    repair_path_text = st.text_input(
-        "Existing .sql file path",
-        key="incident_repair_path",
-        placeholder=r"C:\work\analytics\models\orders.sql",
-    ).strip()
-    if repair_path_text:
-        candidate = Path(repair_path_text).expanduser()
-        try:
-            resolved_candidate = candidate.resolve(strict=True)
-            if candidate.is_symlink() or not resolved_candidate.is_file() or resolved_candidate.suffix.lower() != ".sql":
-                raise OSError("Choose an existing regular .sql file.")
-            if resolved_candidate.stat().st_size > 200_000:
-                raise OSError("The selected SQL file exceeds the 200 KB repair limit.")
-            repair_artifact = {
-                "path": str(resolved_candidate),
-                "file_name": resolved_candidate.name,
-                "sql": resolved_candidate.read_text(encoding="utf-8"),
-            }
-            st.success(f"Repair target loaded: `{resolved_candidate}`")
-        except (OSError, UnicodeError) as exc:
-            st.error(f"Repair target unavailable: {exc}")
+    if hosted_gateway:
+        st.caption(
+            "Upload one dbt .sql file. The hosted app copies it into this judge session's "
+            "disposable workspace; it cannot read or modify server paths."
+        )
+        uploaded_sql = st.file_uploader(
+            "Upload a dbt .sql file",
+            type=["sql"],
+            key="incident_repair_upload",
+        )
+        if uploaded_sql is not None:
+            try:
+                raw_sql = uploaded_sql.getvalue()
+                if not raw_sql or len(raw_sql) > 200_000:
+                    raise OSError("Choose a non-empty SQL file no larger than 200 KB.")
+                decoded_sql = raw_sql.decode("utf-8")
+                safe_name = Path(str(uploaded_sql.name or "selected-model.sql")).name
+                if not safe_name.lower().endswith(".sql"):
+                    raise OSError("Choose a .sql file.")
+                upload_root = _demo_apply_root() / "uploads"
+                upload_root.mkdir(parents=True, exist_ok=True)
+                upload_target = upload_root / (
+                    hashlib.sha256(raw_sql).hexdigest()[:16] + "-" + safe_name
+                )
+                upload_target.write_bytes(raw_sql)
+                repair_artifact = {
+                    "path": str(upload_target.resolve(strict=True)),
+                    "file_name": safe_name,
+                    "sql": decoded_sql,
+                    "source_sha256": hashlib.sha256(raw_sql).hexdigest(),
+                    "hosted_session_copy": True,
+                }
+                st.success(f"Session copy loaded: `{safe_name}`")
+            except (OSError, UnicodeError) as exc:
+                st.error(f"Repair upload unavailable: {exc}")
+    else:
+        st.caption(
+            "Use this when the likely fault is in a checked-out dbt model or singular test available "
+            "on the machine running Lineage Detective. Trace reads it for this run only."
+        )
+        repair_path_text = st.text_input(
+            "Existing .sql file path",
+            key="incident_repair_path",
+            placeholder=r"C:\work\analytics\models\orders.sql",
+        ).strip()
+        if repair_path_text:
+            candidate = Path(repair_path_text).expanduser()
+            try:
+                resolved_candidate = candidate.resolve(strict=True)
+                if candidate.is_symlink() or not resolved_candidate.is_file() or resolved_candidate.suffix.lower() != ".sql":
+                    raise OSError("Choose an existing regular .sql file.")
+                raw_sql = resolved_candidate.read_bytes()
+                if len(raw_sql) > 200_000:
+                    raise OSError("The selected SQL file exceeds the 200 KB repair limit.")
+                repair_artifact = {
+                    "path": str(resolved_candidate),
+                    "file_name": resolved_candidate.name,
+                    "sql": raw_sql.decode("utf-8"),
+                    "source_sha256": hashlib.sha256(raw_sql).hexdigest(),
+                }
+                st.success(f"Repair target loaded: `{resolved_candidate}`")
+            except (OSError, UnicodeError) as exc:
+                st.error(f"Repair target unavailable: {exc}")
 
 if model_available and repair_artifact:
     manual_primary_label = "Investigate, contain & draft file repair" if contain else "Investigate & draft file repair"
@@ -1434,8 +1719,10 @@ with st.expander("Manual mode & advanced settings", expanded=False):
     )
     finish_options = ["Prove safe write + prepare handoff", "Prepare verified handoff only"]
     if repair_artifact:
-        finish_options.append("Apply to selected SQL + prepare handoff")
-        if os.environ.get("HOSTED_MODE") != "1":
+        if hosted_gateway:
+            finish_options.append("Apply to uploaded session copy + prepare handoff")
+        else:
+            finish_options.append("Apply to selected SQL + prepare handoff")
             finish_options.append("Deploy verified repair + confirm live health")
     autonomous_finish_mode = st.selectbox(
         "After the sandbox passes",
@@ -1576,7 +1863,7 @@ else:
         type="primary",
         width="stretch",
         on_click=_queue_autonomous_workflow,
-        disabled=not deployment_profile_ready,
+        disabled=not (deployment_profile_ready and catalog_preflight_ready),
         help=(
             "One approval runs the complete evidence-to-verification path. It never merges a pull "
             "request or invents credentials. Complete every required deployment-profile field "
@@ -1719,9 +2006,26 @@ if manual_clicked or run_autonomous_now:
                     deployment_profile=deployment_profile,
                 )
         except WorkflowCancelled:
-            for key in _WORKFLOW_RESULT_KEYS:
-                st.session_state.pop(key, None)
-            st.info("The autonomous workflow was cancelled. No unverified downstream action was kept.")
+            terminal_deployment = st.session_state.get("deployment_receipt")
+            terminal_verified, _terminal_reason = verify_deployment_receipt(
+                terminal_deployment
+            )
+            if terminal_verified:
+                st.session_state["autonomous_workflow_result"] = {
+                    "state": "verified_workflow_complete",
+                    "verified": True,
+                    "deployed": True,
+                }
+                st.info(
+                    "Cancellation arrived after the deployment and independent live check "
+                    "completed. The verified downstream receipt was preserved."
+                )
+            else:
+                for key in _WORKFLOW_RESULT_KEYS:
+                    st.session_state.pop(key, None)
+                st.info(
+                    "The autonomous workflow was cancelled. No unverified downstream action was kept."
+                )
         except Exception as exc:
             st.session_state["autonomous_workflow_error"] = (
                 f"{type(exc).__name__}: {exc}"

@@ -51,6 +51,15 @@ select
 from {{ ref('raw_customers') }}
 """
 
+FIXED_SCHEMA_MAPPING_SQL = """-- staging model: types + maps the CRM customer export into the analytics schema.
+select
+    customer_id,
+    full_name,
+    email_address as email,
+    created_at
+from {{ ref('raw_customers') }}
+"""
+
 PARTIAL_LOAD_GUARD_SQL = """-- Singular dbt test: fail when the newest ingestion is below 80% of the prior-run baseline.
 with ranked_runs as (
     select
@@ -288,18 +297,69 @@ def _incident_guardrail(report: dict, evidence: list[Any]) -> dict[str, Any] | N
 def _schema_drift_context(report: dict, evidence: list[Any]) -> tuple[dict[str, Any] | None, str]:
     top = (report.get("suspects") or [{}])[0]
     why = " ".join((str(top.get("why", "")), str(report.get("summary", "")))).lower()
-    if not any(term in why for term in ("schema", "rename", "column", "mapping", "email")):
-        return None, "The top diagnosis is not a schema-mapping repair class."
     raw = next((n for n in evidence if "raw.customers" in str(getattr(n, "urn", ""))), None)
     staging = next((n for n in evidence if "stg_customers" in str(getattr(n, "urn", ""))), None)
     if not raw or not staging:
         return None, "The schema-drift repair needs both raw.customers and stg_customers evidence."
-    return {
+    context = {
         "top_urn": str(top.get("urn", "")),
         "diagnosis": str(top.get("why", "")),
         "upstream_columns": list(getattr(raw, "schema_fields", []) or []),
         "downstream_columns": list(getattr(staging, "schema_fields", []) or []),
-    }, "ok"
+        "upstream_properties": dict(getattr(raw, "custom_properties", {}) or {}),
+        "downstream_properties": dict(getattr(staging, "custom_properties", {}) or {}),
+    }
+    diagnosis_supports_mapping = any(
+        term in why for term in ("schema", "rename", "column", "mapping", "email")
+    )
+    evidence_supports_mapping = _evidence_compiled_schema_fix(context)[0]
+    if not diagnosis_supports_mapping and not evidence_supports_mapping:
+        return None, "Neither the diagnosis nor the returned schema evidence supports a mapping repair."
+    return context, "ok"
+
+
+def _rate(value: Any) -> float | None:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _evidence_compiled_schema_fix(
+    context: dict[str, Any],
+) -> tuple[bool, str | None, str]:
+    """Compile the known mapping only when the live evidence proves its preconditions."""
+    upstream = {str(value).lower() for value in context.get("upstream_columns", [])}
+    downstream = {str(value).lower() for value in context.get("downstream_columns", [])}
+    upstream_properties = {
+        str(key).lower(): str(value)
+        for key, value in dict(context.get("upstream_properties") or {}).items()
+    }
+    downstream_properties = {
+        str(key).lower(): str(value)
+        for key, value in dict(context.get("downstream_properties") or {}).items()
+    }
+    current_null_rate = _rate(downstream_properties.get("email_null_rate_current"))
+    prior_null_rate = _rate(downstream_properties.get("email_null_rate_prior"))
+    export_version = upstream_properties.get("crm_export_version", "").lower()
+    has_contract = "email_address" in upstream and "email" in downstream
+    has_transition = "v2" in export_version
+    has_regression = (
+        current_null_rate is not None
+        and prior_null_rate is not None
+        and current_null_rate >= 0.90
+        and prior_null_rate <= 0.20
+    )
+    if not (has_contract and has_transition and has_regression):
+        return False, None, (
+            "The returned DataHub evidence does not jointly prove the v2 email_address contract "
+            "and the downstream email null-rate regression."
+        )
+    return True, FIXED_SCHEMA_MAPPING_SQL, (
+        "DataHub proves the CRM v2 transition, the populated email_address field, and a "
+        "downstream email null-rate jump from the prior baseline to at least 90%. The bounded "
+        "compiler restores that observed contract without adding relations or write operations."
+    )
 
 
 def _llm_generate_fix(llm: Any, context: dict[str, Any], *, model: str) -> tuple[bool, str | None, str]:
@@ -430,6 +490,28 @@ def _custom_artifact_proposal(
             "reason": rationale or "The evidence did not support a change to the selected file.",
         }
     fixed_sql = str(fixed_sql).rstrip() + "\n"
+    current_sql = current_sql.rstrip() + "\n"
+    if fixed_sql == current_sql:
+        return {
+            "state": "no_change_required",
+            "attempted": False,
+            "applicable": False,
+            "verified": True,
+            "target": file_name,
+            "file_name": file_name,
+            "source_path": str(artifact.get("path") or ""),
+            "source_sha256": str(
+                artifact.get("source_sha256") or _sha256(current_sql)
+            ),
+            "reason": (
+                rationale
+                or "The evidence-bound candidate exactly matches the current file."
+            ),
+            "boundary": (
+                "This proves that no source rewrite is required for this artifact. "
+                "Downstream health still requires its own live check."
+            ),
+        }
     safe, reason = _safe_generated_sql(fixed_sql, "custom_dbt_sql_repair")
     new_relations = _dbt_relation_set(fixed_sql) - _dbt_relation_set(current_sql)
     if not safe or new_relations:
@@ -443,7 +525,6 @@ def _custom_artifact_proposal(
                 + ", ".join(sorted(new_relations))
             ),
         }
-    current_sql = current_sql.rstrip() + "\n"
     diff = "".join(
         difflib.unified_diff(
             current_sql.splitlines(True),
@@ -462,7 +543,7 @@ def _custom_artifact_proposal(
         "file_name": file_name,
         "source_path": str(artifact.get("path") or ""),
         "current_sql": current_sql,
-        "source_sha256": _sha256(current_sql),
+        "source_sha256": str(artifact.get("source_sha256") or _sha256(current_sql)),
         "fixed_sql": fixed_sql,
         "rationale": rationale,
         "diff": diff,
@@ -547,8 +628,15 @@ def propose_repair(
             ),
             "representativeness": REPRESENTATIVENESS,
         }
-    generator = fix_generator or (lambda c: _llm_generate_fix(llm, c, model=model))
-    applicable, fixed_sql, rationale = generator(context)
+    proposal_mode = "supplied_generator"
+    if fix_generator is not None:
+        applicable, fixed_sql, rationale = fix_generator(context)
+    else:
+        applicable, fixed_sql, rationale = _evidence_compiled_schema_fix(context)
+        proposal_mode = "evidence_compiled"
+        if not applicable:
+            applicable, fixed_sql, rationale = _llm_generate_fix(llm, context, model=model)
+            proposal_mode = "model_generated"
     if not applicable or not fixed_sql:
         return {
             "state": "not_applicable",
@@ -579,6 +667,7 @@ def propose_repair(
         "current_sql": BROKEN_SQL,
         "source_sha256": _sha256(BROKEN_SQL),
         "rationale": rationale,
+        "proposal_mode": proposal_mode,
         "diff": diff,
         "fixed_sql": fixed_sql.rstrip() + "\n",
         "proposal_sha256": _sha256(fixed_sql.rstrip() + "\n"),
@@ -1002,11 +1091,187 @@ def receipt_for_display(receipt: dict) -> str:
     return json.dumps(receipt, indent=2, sort_keys=True, default=str)
 
 
+def _apply_to_locked_target(
+    target: Path,
+    *,
+    fixed_sql: str,
+    receipt: dict,
+    approval: str,
+) -> dict:
+    """Serialize Lineage Detective writers and recheck human edits immediately before replace."""
+    lock = target.with_name(f".{target.name}.lineage-detective.lock")
+    lock_token = uuid.uuid4().hex
+    lock_payload = json.dumps({
+        "pid": os.getpid(),
+        "created_unix": time.time(),
+        "token": lock_token,
+    }, sort_keys=True).encode("utf-8")
+    lock_fd: int | None = None
+    for attempt in range(2):
+        try:
+            lock_fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            stale = False
+            try:
+                existing = json.loads(lock.read_text(encoding="utf-8"))
+                owner_pid = int(existing.get("pid") or 0)
+                created = float(existing.get("created_unix") or 0)
+                age = max(0.0, time.time() - created)
+                if owner_pid <= 0 or age > 900:
+                    stale = True
+                else:
+                    try:
+                        os.kill(owner_pid, 0)
+                    except ProcessLookupError:
+                        stale = True
+                    except PermissionError:
+                        # A permission denial proves the process exists but is
+                        # not probeable. Never steal an active writer's lock.
+                        stale = False
+                    except OSError:
+                        stale = True
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                try:
+                    stale = time.time() - lock.stat().st_mtime > 900
+                except OSError:
+                    stale = True
+            if stale and attempt == 0:
+                try:
+                    lock.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    stale = False
+                if stale:
+                    continue
+            return {
+                "state": "apply_busy",
+                "applied": False,
+                "error": "Another verified apply is already operating on this target.",
+            }
+    if lock_fd is None:
+        return {
+            "state": "apply_busy",
+            "applied": False,
+            "error": "Another verified apply is already operating on this target.",
+        }
+    try:
+        os.write(lock_fd, lock_payload)
+        os.fsync(lock_fd)
+        original = target.read_bytes()
+        proposed = fixed_sql.encode("utf-8")
+        before_sha = _sha256_bytes(original)
+        after_sha = _sha256_bytes(proposed)
+        expected_before_sha = str(receipt.get("source_sha256") or "")
+        if not expected_before_sha or before_sha != expected_before_sha:
+            return {
+                "state": "apply_rejected",
+                "applied": False,
+                "error": (
+                    "The selected file changed after the repair was proposed. Re-investigate and "
+                    "generate a fresh proposal before applying."
+                ),
+                "target_file": str(target),
+                "expected_before_sha256": expected_before_sha,
+                "actual_before_sha256": before_sha,
+            }
+        backup = target.with_name(f".{target.name}.lineage-detective-{uuid.uuid4().hex}.bak")
+        started = time.time()
+        result: dict[str, Any] = {
+            "state": "apply_started",
+            "applied": False,
+            "target_file": str(target),
+            "backup_file": str(backup),
+            "before_sha256": before_sha,
+            "expected_after_sha256": after_sha,
+            "proposal_sha256": receipt.get("proposal_sha256"),
+            "approved_by": str(approval).strip(),
+        }
+        try:
+            backup.write_bytes(original)
+            if backup.read_bytes() != original:
+                raise OSError("Backup readback did not match the original target.")
+        except Exception as exc:
+            cleanup_error = None
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                cleanup_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
+            result.update(
+                state="apply_failed",
+                error=f"Backup creation failed: {type(exc).__name__}: {exc}",
+                cleanup_error=cleanup_error,
+            )
+            result["duration_seconds"] = round(time.time() - started, 3)
+            result["apply_receipt_sha256"] = _sha256(
+                json.dumps(result, sort_keys=True, default=str)
+            )
+            return result
+        # A non-cooperating editor may ignore our advisory lock. Never replace bytes that
+        # changed after the backup/readback checkpoint.
+        if target.read_bytes() != original:
+            backup.unlink(missing_ok=True)
+            result.update(
+                state="apply_rejected",
+                applied=False,
+                error=(
+                    "The selected file changed during implementation. No rewrite was applied; "
+                    "generate a fresh proposal."
+                ),
+            )
+            result["duration_seconds"] = round(time.time() - started, 3)
+            result["apply_receipt_sha256"] = _sha256(
+                json.dumps(result, sort_keys=True, default=str)
+            )
+            return result
+        try:
+            _atomic_write(target, proposed)
+            readback = target.read_bytes()
+            if readback != proposed or _sha256_bytes(readback) != after_sha:
+                raise OSError("Post-write hash readback did not match the verified proposal.")
+            result.update(
+                state="applied_verified",
+                applied=True,
+                after_sha256=_sha256_bytes(readback),
+                backup_sha256=_sha256_bytes(backup.read_bytes()),
+            )
+        except Exception as exc:
+            rollback_error = None
+            rolled_back = False
+            try:
+                _atomic_write(target, original)
+                rolled_back = target.read_bytes() == original
+            except Exception as rollback_exc:
+                rollback_error = f"{type(rollback_exc).__name__}: {rollback_exc}"
+            result.update(
+                state="apply_failed",
+                applied=False,
+                rolled_back=rolled_back,
+                error=f"{type(exc).__name__}: {exc}",
+                rollback_error=rollback_error,
+            )
+        result["duration_seconds"] = round(time.time() - started, 3)
+        result["apply_receipt_sha256"] = _sha256(
+            json.dumps(result, sort_keys=True, default=str)
+        )
+        return result
+    finally:
+        os.close(lock_fd)
+        try:
+            current = json.loads(lock.read_text(encoding="utf-8"))
+            if current.get("token") == lock_token:
+                lock.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+
 def apply_verified_repair(
     receipt: dict,
     *,
     target_file: Path | str,
     approval: str | None,
+    allowed_root: Path | str | None = None,
 ) -> dict:
     """Atomically apply an exact verified rewrite to a human-selected local dbt model.
 
@@ -1039,83 +1304,23 @@ def apply_verified_repair(
     if not target.is_file() or target.suffix.lower() != ".sql":
         return {"state": "apply_rejected", "applied": False,
                 "error": "Choose an existing .sql dbt model file."}
+    if allowed_root is not None:
+        try:
+            root = Path(allowed_root).expanduser().resolve(strict=True)
+            target.relative_to(root)
+        except (FileNotFoundError, OSError, ValueError):
+            return {
+                "state": "apply_rejected",
+                "applied": False,
+                "error": "The target must stay inside this session's allowed workspace.",
+            }
 
-    original = target.read_bytes()
-    proposed = fixed_sql.encode("utf-8")
-    before_sha = _sha256_bytes(original)
-    after_sha = _sha256_bytes(proposed)
-    expected_before_sha = str(receipt.get("source_sha256") or "")
-    if not expected_before_sha or before_sha != expected_before_sha:
-        return {
-            "state": "apply_rejected",
-            "applied": False,
-            "error": (
-                "The selected file changed after the repair was proposed. Re-investigate and "
-                "generate a fresh proposal before applying."
-            ),
-            "target_file": str(target),
-            "expected_before_sha256": expected_before_sha,
-            "actual_before_sha256": before_sha,
-        }
-    backup = target.with_name(f".{target.name}.lineage-detective-{uuid.uuid4().hex}.bak")
-    started = time.time()
-    result: dict[str, Any] = {
-        "state": "apply_started",
-        "applied": False,
-        "target_file": str(target),
-        "backup_file": str(backup),
-        "before_sha256": before_sha,
-        "expected_after_sha256": after_sha,
-        "proposal_sha256": receipt.get("proposal_sha256"),
-        "approved_by": str(approval).strip(),
-    }
-    try:
-        backup.write_bytes(original)
-        if backup.read_bytes() != original:
-            raise OSError("Backup readback did not match the original target.")
-    except Exception as exc:
-        cleanup_error = None
-        try:
-            backup.unlink(missing_ok=True)
-        except OSError as cleanup_exc:
-            cleanup_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
-        result.update(
-            state="apply_failed",
-            error=f"Backup creation failed: {type(exc).__name__}: {exc}",
-            cleanup_error=cleanup_error,
-        )
-        result["duration_seconds"] = round(time.time() - started, 3)
-        result["apply_receipt_sha256"] = _sha256(json.dumps(result, sort_keys=True, default=str))
-        return result
-    try:
-        _atomic_write(target, proposed)
-        readback = target.read_bytes()
-        if readback != proposed or _sha256_bytes(readback) != after_sha:
-            raise OSError("Post-write hash readback did not match the verified proposal.")
-        result.update(
-            state="applied_verified",
-            applied=True,
-            after_sha256=_sha256_bytes(readback),
-            backup_sha256=_sha256_bytes(backup.read_bytes()),
-        )
-    except Exception as exc:
-        rollback_error = None
-        rolled_back = False
-        try:
-            _atomic_write(target, original)
-            rolled_back = target.read_bytes() == original
-        except Exception as rollback_exc:
-            rollback_error = f"{type(rollback_exc).__name__}: {rollback_exc}"
-        result.update(
-            state="apply_failed",
-            applied=False,
-            rolled_back=rolled_back,
-            error=f"{type(exc).__name__}: {exc}",
-            rollback_error=rollback_error,
-        )
-    result["duration_seconds"] = round(time.time() - started, 3)
-    result["apply_receipt_sha256"] = _sha256(json.dumps(result, sort_keys=True, default=str))
-    return result
+    return _apply_to_locked_target(
+        target,
+        fixed_sql=fixed_sql,
+        receipt=receipt,
+        approval=str(approval),
+    )
 
 
 def restore_applied_repair(apply_receipt: dict, *, approval: str | None) -> dict:

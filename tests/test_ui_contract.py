@@ -12,9 +12,35 @@ APP = (ROOT / "app.py").read_text(encoding="utf-8")
 AGENT = (ROOT / "src" / "agent.py").read_text(encoding="utf-8")
 RECORDER = (ROOT / "tools" / "record_judge_demo.py").read_text(encoding="utf-8")
 VIDEO_BUILDER = (ROOT / "tools" / "build_judge_video.py").read_text(encoding="utf-8")
+ONE_TAKE_VIDEO_BUILDER = (
+    ROOT / "tools" / "build_judge_video_one_take.py"
+).read_text(encoding="utf-8")
+DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+README = (ROOT / "README.md").read_text(encoding="utf-8")
 
 
 class JudgeUiContractTests(unittest.TestCase):
+    def test_fresh_judge_browser_opens_the_access_sidebar(self):
+        self.assertIn('initial_sidebar_state="expanded"', APP)
+
+    def test_public_mode_cannot_prefer_an_accidental_direct_provider_key(self):
+        self.assertIn(
+            'local_model_key = SELF_HOSTED_MODE and bool(os.environ.get("ANTHROPIC_API_KEY"))',
+            APP,
+        )
+
+    def test_packaged_runtime_contains_the_verified_streamlit_presentation_config(self):
+        self.assertIn(
+            "COPY --from=verified --chown=lineage:lineage /app/.streamlit /app/.streamlit",
+            DOCKERFILE,
+        )
+
+    def test_documented_separate_terminal_cli_selects_self_hosted_mode(self):
+        self.assertGreaterEqual(
+            README.count("export LINEAGE_RUN_MODE=self_hosted"),
+            2,
+        )
+
     def test_original_mascot_asset_is_shipped_as_a_png(self):
         mascot = ROOT / "assets" / "lineage-detective-mascot.png"
         self.assertTrue(mascot.is_file(), "judge checkout must include the mascot asset")
@@ -51,8 +77,61 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn('DEFAULT_JUDGE_ENDPOINT = "https://lineage-detective-judge-gateway.equinoxaifinance.workers.dev"', APP)
         self.assertIn('"Judge model gateway URL (optional)"', APP)
         self.assertIn('"Judge access code (optional)"', APP)
+        self.assertIn("preflight_judge_gateway(", APP)
+        self.assertIn("Model-backed judge gateway verified.", APP)
+        self.assertNotIn("elif gateway_model:\\n        st.success", APP)
         self.assertIn("reasoning_endpoint=judge_endpoint or None, judge_code=judge_code or None", APP)
         self.assertIn("provider key remains server-side", APP)
+
+    def test_public_judge_code_is_hidden_until_catalog_preflight_passes(self):
+        self.assertIn(
+            "judge_lane_available = SELF_HOSTED_MODE or catalog_preflight_ready",
+            APP,
+        )
+        self.assertIn(
+            "if hosted_gateway and not judge_lane_available:",
+            APP,
+        )
+        self.assertIn(
+            "Judge lane unavailable: the live contest DataHub catalog is not connected.",
+            APP,
+        )
+        for executed_proof in (
+            'catalog.search("customer", num_results=3)',
+            "catalog.get_entities([default_urn, probe_urn])",
+            "catalog.get_lineage(default_urn, upstream=True, max_hops=3)",
+            "catalog.add_tag(probe_urn, probe_tag)",
+            "catalog.remove_tag(probe_urn, probe_tag)",
+        ):
+            self.assertIn(executed_proof, APP)
+        self.assertIn(
+            "gateway_model = bool(judge_lane_available and judge_endpoint and judge_code)",
+            APP,
+        )
+
+    def test_public_container_uses_bundled_stdio_mcp_without_inventing_a_token(self):
+        self.assertIn("bundled_catalog = is_bundled_catalog_url(server)", APP)
+        self.assertIn(
+            "if server and (bundled_catalog or (mcp_url and token)):",
+            APP,
+        )
+        self.assertIn("token=token or None", APP)
+        self.assertIn("mcp_url=mcp_url or None", APP)
+
+    def test_catalog_credential_copy_matches_each_runtime_state(self):
+        self.assertIn(
+            "The scoped catalog credential stays server-side and is never sent to your browser.",
+            APP,
+        )
+        self.assertIn(
+            "No DataHub credential is requested from the judge; the workflow remains disabled",
+            APP,
+        )
+        self.assertIn(
+            "Any DataHub token you enter is held only in this active process/session.",
+            APP,
+        )
+        self.assertNotIn("No token is stored by this app.", APP)
 
     def test_containment_tags_appear_only_after_an_actual_confirmed_action(self):
         self.assertIn('confirmed_action = (st.session_state["report"].get("action") or {}).get("applied")', APP)
@@ -164,6 +243,7 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertNotIn('aria-label="Lineage Detective status"', APP)
 
     def test_video_recorder_requires_visible_monotonic_action_local_progress(self):
+        self.assertIn('code_input.press("Enter")', RECORDER)
         self.assertIn('[aria-label="Verified workflow progress"]', RECORDER)
         self.assertIn('status.wait_for(state="visible"', RECORDER)
         self.assertIn("Workflow progress moved backward:", RECORDER)
@@ -186,6 +266,15 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn("Narration left an unsupported visual stretch:", VIDEO_BUILDER)
         self.assertNotIn("\"I'm Codex.", VIDEO_BUILDER)
 
+    def test_final_video_uses_one_uninterrupted_narration_take(self):
+        self.assertIn("single continuous performance", ONE_TAKE_VIDEO_BUILDER)
+        self.assertEqual(
+            ONE_TAKE_VIDEO_BUILDER.count("client.audio.speech.create("),
+            1,
+        )
+        self.assertIn('"single_tts_take": True', ONE_TAKE_VIDEO_BUILDER)
+        self.assertIn("silencedetect=noise=-38dB:d=1.0", ONE_TAKE_VIDEO_BUILDER)
+
     def test_completed_autonomous_run_cannot_be_rendered_back_as_review(self):
         autonomous = APP.index("if autonomous_is_current:")
         handoff = APP.index('workflow_slot.markdown(_workflow_html("handoff")', autonomous)
@@ -195,6 +284,11 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertLess(handoff, sandbox)
         self.assertLess(sandbox, review)
 
+    def test_failed_autonomous_sandbox_never_jumps_back_to_review(self):
+        self.assertIn('failed_receipt_is_current = bool(', APP)
+        self.assertIn('_workflow_html("sandbox_failed", detail=existing_receipt.get("error"))', APP)
+        self.assertIn('"sandbox_failed": 97', APP)
+        self.assertIn('if phase in {"error", "sandbox_failed"}', APP)
     def test_preflight_vocabulary_check_does_not_move_progress_past_reasoning(self):
         vocab_check = APP.index('"Checking the incident-tag vocabulary once before the investigation."')
         preceding = APP[max(0, vocab_check - 180):vocab_check]
@@ -304,9 +398,14 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn('"LINEAGE_DEPLOY_ROLLBACK_COMMAND"', APP)
         self.assertIn('"LINEAGE_DEPLOY_ROLLBACK_VERIFY_COMMAND"', APP)
         self.assertIn("deployment_profile=deployment_profile", APP)
-        self.assertIn("disabled=not deployment_profile_ready", APP)
-        self.assertIn('os.environ.get("HOSTED_MODE") != "1"', APP)
+        self.assertIn(
+            "disabled=not (deployment_profile_ready and catalog_preflight_ready)",
+            APP,
+        )
+        self.assertIn("allow_local_deployment=SELF_HOSTED_MODE", APP)
         self.assertIn('"Download deployment receipt"', APP)
+        self.assertIn("terminal_verified, _terminal_reason = verify_deployment_receipt(", APP)
+        self.assertIn("The verified downstream receipt was preserved.", APP)
 
     def test_datahub_cloud_managed_mcp_is_a_first_class_connection(self):
         self.assertIn('"DataHub Cloud managed MCP"', APP)
@@ -315,6 +414,27 @@ class JudgeUiContractTests(unittest.TestCase):
         self.assertIn("mcp_url=mcp_url or None", APP)
         self.assertIn('"Sign in with DataHub OAuth"', APP)
         self.assertIn("authorize_datahub()", APP)
+
+    def test_hosted_file_repair_uses_session_upload_not_server_paths(self):
+        self.assertIn('"Upload a dbt .sql file"', APP)
+        self.assertIn('"hosted_session_copy": True', APP)
+        self.assertIn('"Apply to uploaded session copy + prepare handoff"', APP)
+        self.assertIn("apply_allowed_root=", APP)
+
+    def test_public_judge_mode_never_solicits_customer_production_secrets(self):
+        self.assertIn("PUBLIC_JUDGE_MODE = is_public_judge()", APP)
+        self.assertIn("SELF_HOSTED_MODE = is_self_hosted()", APP)
+        self.assertIn("if SELF_HOSTED_MODE:", APP)
+        self.assertIn("The public judge app ", APP)
+        self.assertIn("never asks for GitHub, warehouse, orchestrator", APP)
+        self.assertIn("Contest tenant · credentials stay server-side", APP)
+        self.assertIn("No DataHub credential is ", APP)
+        self.assertIn(
+            "requested from the judge, and no fallback data is substituted.",
+            APP,
+        )
+        self.assertNotIn("No judge credential is requested", APP)
+        self.assertNotIn('os.environ.get("HOSTED_MODE")', APP)
 
 
 if __name__ == "__main__":

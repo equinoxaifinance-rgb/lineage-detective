@@ -1,43 +1,72 @@
 # Judge access handoff
 
-The application preloads this bounded reasoning gateway:
+This tracked file contains no credential. It defines the exact release path.
 
-`https://lineage-detective-judge-gateway.equinoxaifinance.workers.dev`
+## Public judge path
 
-The hosted DataHub Cloud application is:
+The final release is designed to require one invitation code:
 
-`https://lineage-detective.equinoxaifinance.workers.dev`
+1. Open the public Lineage Detective URL from Devpost.
+2. Enter the judge access code from Devpost's testing instructions.
+3. The app authenticates to the fixed reasoning gateway and connects
+   server-side to a dedicated, non-sensitive DataHub judge catalog.
+4. Select an included incident or search the live catalog.
+5. Run the investigation. The app reads DataHub through MCP, contains through
+   MCP when requested, reads writes back, proposes a repair, runs the isolated
+   trial, and presents downloadable receipts/handoff.
 
-The provider API key is **never** given to a judge, placed in Git, embedded in the app, or pasted
-into Devpost. It remains an encrypted Cloudflare Worker secret.
+Judges are never asked for a provider, DataHub, GitHub, warehouse,
+orchestrator, or Cloudflare secret in the public mode.
 
-## Submission-time action
+## Required pre-release configuration
 
-Place the current **judge access code** in Devpost's testing-instructions/additional-details field,
-with these directions:
+The public Cloudflare Container bundles an isolated DataHub Core v1.6 catalog
+and the pinned official MCP Server. Internal MySQL and token-service
+credentials are generated randomly on each cold start and never leave the
+private container network. No DataHub credential is shipped in source or sent
+to the browser.
 
-1. Start Lineage Detective.
-2. Confirm the gateway URL is already present in the sidebar.
-3. Paste the supplied judge access code.
-4. The app should report that the model-backed judge gateway is ready.
-5. Run the complete rewrite walkthrough.
+The gateway must contain encrypted secrets:
 
-For the hosted application, also supply a DataHub Cloud tenant URL and a scoped service-account
-token, or use the repository quickstart for the bundled local DataHub walkthrough. The hosted
-application intentionally does not contain a shared DataHub credential.
+- `ANTHROPIC_API_KEY`
+- `JUDGE_CODE`
 
-If the contest does not expose a testing-instructions field, provide the access code directly to
-the organizer through its official participant-support channel. Do not publish it in the repository.
+The public app must pass `tools/verify_judge_catalog.py` against its bundled
+catalog, and the gateway must pass authenticated `/preflight`, before the code
+is placed in Devpost. The access window is configured through
+`2026-09-15T23:59:59Z`, after the August 31 judging end.
 
-## Verified boundary — 2026-07-26
+## Security and budget controls
 
-- Worker deployment exists.
-- `ANTHROPIC_API_KEY` and `JUDGE_CODE` exist as encrypted Worker secrets.
-- `GET /health` returned HTTP 200.
-- An authorized `/reason` request returned `GATEWAY_OK`.
-- An unauthorized request is rejected before provider access.
-- Rate limit: 10 requests per minute per IP/code.
-- Whole-gateway cap: 200 requests per UTC day through a Durable Object.
+- The judge code is an invitation credential, not the provider key.
+- The browser never receives the provider or DataHub token.
+- Authentication attempts and reasoning requests are independently throttled.
+- A strongly consistent daily gateway cap limits account-level spend.
+- Request and response sizes and model output are bounded.
+- The fixed public runtime rejects arbitrary connector credentials and
+  deployment commands.
+- The final code is stored only in an encrypted local owner handoff and
+  Devpost's judge testing instructions.
 
-This handoff contains no secret values. Re-run the authorized probe immediately before submission
-and after any credential rotation.
+## Self-hosted evaluator path
+
+The public repository also supports `python quickstart.py`. It starts a real
+local DataHub, seeds three reproducible incidents, and launches the app in
+`self_hosted` mode. Customer connectors and deployment commands are available
+only there because their credentials and network belong inside the evaluator's
+own process.
+
+## Current state
+
+The reasoning gateway has its encrypted provider secret and bounded invitation
+lane. The hosted app runs a real bundled DataHub catalog and has completed the
+full public workflow through MCP read/write/readback, model-backed diagnosis,
+dbt/DuckDB repair verification, rollback proof, and downloadable handoff.
+
+The invitation code used during testing was intentionally temporary and is now
+rejected by the gateway. The final code was generated after the last browser
+test, installed as an encrypted Cloudflare secret, authenticated through the
+live `/preflight` endpoint, and stored in the encrypted local owner handoff.
+Only its SHA-256 is present in the rotation receipt. It still must be copied to
+Devpost's private testing instructions during release synchronization. See
+[LIVE-STATUS.md](LIVE-STATUS.md) for the current release stage.

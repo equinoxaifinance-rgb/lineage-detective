@@ -25,6 +25,9 @@ class JudgeGatewayContractTests(unittest.TestCase):
     def test_judge_access_is_bounded_before_provider_call(self):
         self.assertIn('x-lineage-judge-code', SOURCE)
         self.assertIn('env.JUDGE_RATE.limit', SOURCE)
+        self.assertIn('judge-auth-attempt', SOURCE)
+        self.assertIn('judge-reasoning', SOURCE)
+        self.assertNotIn('${clientIp}:${suppliedCode}', SOURCE)
         self.assertIn('MAX_OUTPUT_TOKENS = 1_500', SOURCE)
         self.assertIn('MAX_BODY_BYTES = 60_000', SOURCE)
         self.assertIn('validOptionalText(body?.system, MAX_SYSTEM_CHARS)', SOURCE)
@@ -33,6 +36,28 @@ class JudgeGatewayContractTests(unittest.TestCase):
         self.assertIn("env.JUDGE_BUDGET.getByName", SOURCE)
         self.assertEqual(CONFIG["durable_objects"]["bindings"][0]["class_name"], "JudgeBudget")
         self.assertEqual(CONFIG["migrations"][0]["new_sqlite_classes"], ["JudgeBudget"])
+
+    def test_judge_access_has_a_visible_fail_closed_expiration(self):
+        self.assertEqual(CONFIG["vars"]["JUDGE_ACCESS_EXPIRES"], "2026-09-15T23:59:59Z")
+        self.assertIn("judge_access_window_misconfigured", SOURCE)
+        self.assertIn("judge_access_expired", SOURCE)
+        self.assertIn("access_expires", SOURCE)
+        self.assertIn("access_active", SOURCE)
+        self.assertIn('url.pathname === "/preflight"', SOURCE)
+        self.assertIn('judge-budget/status?cap=', SOURCE)
+        self.assertIn("daily_requests_remaining", SOURCE)
+
+    def test_invalid_authenticated_requests_do_not_consume_daily_budget(self):
+        validation = SOURCE.index("invalid_reasoning_request")
+        consumption = SOURCE.index("judge-budget/consume?cap=")
+        provider = SOURCE.index('fetch("https://api.anthropic.com/v1/messages"')
+        self.assertLess(validation, consumption)
+        self.assertLess(consumption, provider)
+
+    def test_body_limit_is_enforced_on_read_bytes_not_only_content_length(self):
+        self.assertIn("new Uint8Array(await request.arrayBuffer())", SOURCE)
+        self.assertIn("rawBody.byteLength > MAX_BODY_BYTES", SOURCE)
+        self.assertIn('new TextDecoder("utf-8", { fatal: true })', SOURCE)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,11 @@ SIDECAR_REQUIREMENTS = {
 LOCKS = {
     "runtime-lock": ("requirements-runtime.lock", "setuptools==83.0.0", "pip==26.1.2"),
     "sidecar-lock": ("requirements-datahub-sidecar.lock", "setuptools==81.0.0", "pip==26.1.2"),
+    "sidecar-linux-lock": (
+        "requirements-datahub-sidecar-linux.lock",
+        "setuptools==81.0.0",
+        "pip==26.1.2",
+    ),
 }
 
 

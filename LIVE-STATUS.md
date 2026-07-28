@@ -1,67 +1,120 @@
-# Lineage Detective release status — 2026-07-26
+# Lineage Detective release state
 
-This file separates implemented, tested, packaged, deployed, published, and submitted states.
+Last reconciled: 2026-07-28 06:24 EDT
 
-## Green: implemented and independently exercised
+This file is the canonical state ledger. `Implemented`, `tested`, `packaged`,
+`deployed`, `published`, and `submitted` are intentionally separate.
 
-- Live DataHub MCP search, lineage traversal, entity evidence, containment writes, and write
-  readback.
-- Model-backed and disclosed evidence-only reasoning lanes.
-- Evidence-bound schema rewrite, partial-load guard, stale-feed guard, and arbitrary checked-out
-  dbt SQL proposal.
-- One-approval workflow plus manual review mode.
-- Per-run sandbox isolation, rollback-required receipt integrity, source-drift rejection, atomic
-  apply/backup/restore, and handoff-before-write journaling.
-- Optional GitHub, dbt Cloud, Airflow, Fivetran, Snowflake, DataHub assertion, and customer-command
-  connectors with scoped credentials and secret-free receipts.
-- Hosted public-network policy and redirect rejection for credential-bearing requests.
-- 109/109 local tests in 48.024 seconds and 109/109 tests from the exact clean
-  Linux/amd64 release-candidate image in 28.779 seconds.
-- Three executed example cases with independently verified hashes and handoff ZIPs.
-- Local browser full run: four live lineage entities, containment plus two impact writes read back,
-  0/8 to 8/8 sandbox assertion, rollback confirmed, session-isolated exact-byte apply, handoff and
-  receipt downloads rendered, zero console errors, and no desktop/mobile horizontal overflow.
+## Green: implemented and packaged locally
 
-## Green: packaged release
+- Two explicit runtime modes:
+  - `public_judge` is the fail-closed default. It accepts only the release-bound
+    reasoning gateway and server-side contest DataHub configuration. It does not
+    expose customer connector credentials or arbitrary deployment commands.
+  - `self_hosted` enables customer-controlled DataHub, repository, connector,
+    validation, and deployment configuration.
+- Real DataHub MCP search, upstream and downstream lineage, entity reads, tag
+  writes, and independent tag readback.
+- Evidence-grounded model output with strict schema validation, observed-URN
+  enforcement, and one bounded correction retry.
+- Approval-gated proposal, isolated dbt/DuckDB verification, exact-byte apply,
+  source-drift protection, serialized writers, backup, restore, and signed
+  receipts.
+- Connector protocols for GitHub pull requests, dbt Cloud, Airflow, Fivetran,
+  Snowflake SQL, DataHub assertions, and customer validation commands.
+- Self-hosted deployment profile with an independent live check and mandatory
+  verified rollback on failure.
+- Judge gateway with an access window, authentication attempt throttling,
+  reasoning throttling, request-size limits, fixed model/output limits, and a
+  durable whole-gateway daily budget.
+- Cloudflare Container packaging from digest-pinned Python and rootless-Docker
+  bases, a minimized build context, and an unprivileged application process.
+  The image build itself runs compilation, the full test suite, the security
+  boundary verifier, and the bound-example verifier before export.
 
-- Image proof pass: `lineage-detective:release-candidate`
-- Proof-pass digest:
-  `sha256:f67902d39550812fecb455c2cd932db8d4c525bba4f405e3adc6dd57b0f5132f`
-- Clean health check: HTTP 200 `ok`
-- `pip check`: no broken requirements
-- App-runtime audit: no known vulnerabilities
-- Secret scan: zero recognizable provider/cloud token files
+## Green: current receipts
 
-The exact deployment image is rebuilt after this status file is committed. Its digest is recorded
-in the external deployment receipt and Cloudflare version readback rather than written back into
-the image that it hashes.
+- Latest final image-build suite: **205 passed, 0 failed** in 32.771 seconds.
+- Deployed runtime image digest:
+  `sha256:2d6da7d2a742318e067a6901e50fb44a7edaba518466b05512b268c8e5e640fd`.
+- Final UI/Container capture-contract regression suite: 55 passed.
+- Packaged app:
+  - `pip check`: no broken requirements.
+  - `pip-audit 2.10.1`: no known vulnerabilities in the checked-in,
+    hash-locked runtime requirements.
+  - source compilation: exit 0.
+  - DataHub, MCP, and Streamlit runtime UID: 1000 (`lineage`), not root.
+  - health endpoint: `ok`.
+  - root page: HTTP 200.
+  - shipped Streamlit config:
+    `sha256:4c0d35e1ff8638b26ce3d826737615dbe05e23dd6f0d3033be702ac668276abe`.
+- Judge gateway:
+  - 8 Node runtime tests passed.
+  - syntax check passed.
+  - `npm audit`: 0 vulnerabilities.
+  - Wrangler 4.114.0 dry-run passed.
+- Hosted Container Worker:
+  - `npm audit`: 0 vulnerabilities.
+  - Wrangler 4.114.0 rebuilt the digest-pinned verified image and passed dry-run.
+  - Cloudflare Container version 41 is active on the exact image digest above.
+  - Cloudflare readback reports one healthy instance, zero rollout errors, and
+    an explicit empty `authorized_keys` list.
+- Three committed output examples and every bound receipt/artifact verified.
+- GitHub Actions are pinned to exact commit SHAs; CI repeats tests, audits,
+  example verification, and both Cloudflare dry-runs.
 
-## Yellow until downstream readback
+## Green: executed public-path receipts
 
-- Public GitHub synchronization and CI result.
-- Cloudflare deployment of the exact current source plus public header/UI/runtime checks.
-- Fresh authorized judge-gateway probe and encrypted-secret inventory.
-- Final video owner approval and external publication.
+- The public one-approval browser workflow completed at 100% against the real
+  bundled DataHub catalog using the server-side judge gateway.
+- DataHub returned seven catalog entities across six dependency edges; the
+  gateway produced the constrained diagnosis and the evidence compiler bound
+  the repair proposal to the observed schema transition.
+- The dbt/DuckDB trial measured the broken baseline, applied the exact rewrite,
+  passed eight of eight assertions, and verified rollback.
+- The public browser downloaded the JSON sandbox receipt, exact-byte
+  implementation receipt, and human-handoff ZIP. The standalone receipt and
+  the receipt embedded in the ZIP both report the verified 0/8 -> 8/8 result
+  and rollback proof. The implementation receipt reports `applied_verified`,
+  a proposal/expected/post-write hash match, and a recorded backup.
+- Independent MCP readback confirmed:
+  - `QUARANTINE_INCIDENT` on
+    `analytics.staging.stg_customers`;
+  - `IMPACTED_BY_INCIDENT` on
+    `analytics.marts.dim_customers`; and
+  - `IMPACTED_BY_INCIDENT` on `bi.customer_360`.
+- The browser-test invitation was rotated after the live run. The final
+  invitation passed authenticated `/preflight`; an independent wrong code was
+  rejected at HTTP 401. The final code is stored in the encrypted local owner
+  handoff and remains valid through 2026-09-15.
 
-## Green: final judge video artifact
+## Yellow: remaining external release gates
 
-- 148.100 seconds, 1920x1080, 30 fps, H.264 video plus AAC audio.
-- The browser recording contains one uninterrupted real approval-to-repair workflow; its event
-  timeline recorded the single action-local rail advancing monotonically through
-  10, 22, 36, 47, 57, 60, 61, 70, 76, 88, 94, and 100 percent, then reached live lineage,
-  diagnosis, exact diff, sandbox receipt, autonomous completion, and verified handoff.
-- Both streams decoded end to end with zero decoder errors. Integrated loudness measured
-  -16.2 LUFS with -0.9 dB true peak. Silence analysis found no unsupported stretch; the
-  longest pause was 2.255 seconds.
-- An independent speech-to-text pass recovered the intended technical claims, including
-  the data-engineer/on-call use case, the investigate-to-implementation product difference,
-  controller and verifier internals, zero rows passing before and all eight rows passing after,
-  plus the human/AI authorship note.
-- SHA-256:
-  `6e0312290a707e536820f4e2e5e206b444de15d516d70d45063a0c078ee323ba`
+These are real gates, not product-code failures:
 
-## Intentionally not started
+1. **Current public repository.** The remote `main` branch is behind the local
+   release work. Push only after the final release receipt is generated.
+2. **Video publication.** The final 169.733-second live demonstration is
+   locally complete and QA-verified. It still needs Bryan's approval, a public
+   YouTube upload, and anonymous readback.
+3. **Devpost synchronization.** Devpost confirmed submission `1077519` on
+   2026-07-12, and the public project page at
+   `https://devpost.com/software/lineage-detective` independently renders as
+   submitted to the DataHub hackathon. That published entry is an earlier
+   build: it still embeds YouTube video `3DDZsz4BtJU`, links the repository but
+   no live app, and describes the original diagnose/contain workflow rather
+   than this release candidate. Owner eligibility/IP attestations, the final
+   video, synchronized repository, live app, and judge instructions must be
+   entered and read back only after the preceding gates are green.
 
-- Devpost publication/submission. Bryan requested the final video first. After he approves it, run
-  the final independent council against the shipped artifact, address any evidenced finding, then
-  publish and submit.
+## Release order
+
+1. Freeze source and documentation; bind the final release receipt.
+2. Push the public Apache-2.0 repository and read it back anonymously.
+3. After owner approval, upload the final live video publicly and read it back
+   anonymously.
+4. Update the already-submitted Devpost entry and read back every public field.
+
+Until those release-synchronization steps complete, the honest state is:
+**final product and public judge path verified; repository, media, and Devpost
+are not yet synchronized to this release.**

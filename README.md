@@ -191,20 +191,24 @@ click **Investigate**. For the schema-drift sample, the UI shows a diff first; a
 approval is required before it may run one isolated repair trial. It's safe to re-run; each step is
 skipped if already done.
 
-### Hosted DataHub Cloud path
+### Hosted judge path
 
-The same application is deployed at
-**https://lineage-detective.equinoxaifinance.workers.dev** in a Cloudflare Container. It defaults
-to DataHub Cloud's managed streamable-HTTP MCP endpoint. Enter a tenant URL and a scoped DataHub
-service-account token; the token stays in the active Streamlit session and is not written to the
-repository or a receipt. The hosted path requires public HTTPS for DataHub and connector endpoints,
-rejects embedded credentials and nonstandard ports, and rejects DNS answers that resolve to local
-or private network addresses. Credential-bearing requests do not follow redirects. Use local
-quickstart when the DataHub or Airflow endpoint is private.
+The release candidate is packaged for
+**https://lineage-detective.equinoxaifinance.workers.dev** in a Cloudflare Container. Its public
+judge lane is fail-closed and self-contained: the Container runs an isolated DataHub Core v1.6
+catalog plus the pinned official MCP Server, while internal database and token-service credentials
+are generated randomly on each cold start and remain inside its private network. A judge is never
+asked to paste a DataHub, GitHub, warehouse, orchestrator, or provider secret into the shared
+public process. The only judge input is the bounded invitation code supplied privately in the
+testing instructions; the reasoning provider key remains an encrypted Worker secret. The current
+external deployment state is recorded in [`LIVE-STATUS.md`](LIVE-STATUS.md). No shared public
+catalog, mocked lineage response, or synthetic MCP substitute is used.
 
-The hosted URL is not represented as a shared fake catalog. It performs real work only after it is
-connected to a real DataHub Cloud tenant. The one-command local path remains the credential-free
-way to reproduce the bundled incidents against a real local DataHub deployment.
+Customer systems belong in the explicit self-hosted mode. There, credentials remain inside the
+customer-controlled process and network while GitHub, dbt Cloud, Airflow, Fivetran, Snowflake,
+DataHub assertion, and verified deployment actions are available. The one-command local path starts
+that mode and reproduces the bundled incidents against a real local DataHub deployment. No
+synthetic catalog is substituted when the contest tenant is unavailable.
 
 **Safe judge default:** Evidence-only mode starts read-only. With a local provider key or
 supplied judge gateway access, containment is enabled by default; uncheck it for a read-only
@@ -233,6 +237,7 @@ python -m pip install --require-hashes -r requirements-runtime.lock
 # start DataHub, and seed the incidents. It never installs into global Python.
 python quickstart.py
 # It launches the UI after setup. For a one-off CLI run in another terminal:
+export LINEAGE_RUN_MODE=self_hosted          # PowerShell: $env:LINEAGE_RUN_MODE="self_hosted"
 export ANTHROPIC_API_KEY=...               # the reasoning model
 export DATAHUB_GMS_URL=http://localhost:8080
 python src/agent.py "the revenue dashboard dropped 40%, no errors" \
@@ -241,8 +246,10 @@ python src/agent.py "the revenue dashboard dropped 40%, no errors" \
 </details>
 
 The agent uses the pinned official DataHub MCP server (`mcp-server-datahub==0.6.0`) selected by
-quickstartâ€”in the fixed app runtime when upstream supports it, otherwise in the isolated sidecar.
-Advanced users can set `DATAHUB_MCP_CMD` to override its launch command. On DataHub Cloud, point
+quickstart—in the fixed app runtime when upstream supports it, otherwise in the isolated sidecar.
+Development-only overrides require `LINEAGE_ALLOW_UNPINNED_MCP=1` together with
+`DATAHUB_MCP_CMD`; release execution otherwise refuses unpinned PATH or execution-time installs.
+On DataHub Cloud, point
 `DATAHUB_GMS_URL` / `DATAHUB_GMS_TOKEN` at your tenant instead.
 
 For DataHub Cloud v0.3.12+, select **DataHub Cloud managed MCP** in the app. The app derives the
@@ -258,6 +265,7 @@ the service-account path instead of persisting individual OAuth refresh tokens.
 The seeded incidents are only a guaranteed showcase — **the agent is not hardcoded to them.** Point
 it at *any* asset in *any* DataHub and it investigates the real lineage and metadata there:
 ```bash
+export LINEAGE_RUN_MODE=self_hosted          # PowerShell: $env:LINEAGE_RUN_MODE="self_hosted"
 python src/agent.py "<your symptom in plain English>" "<any dataset/dashboard URN>" --act
 ```
 To ask for a constrained repair against a real checked-out dbt model, add
@@ -284,10 +292,14 @@ own MCP tools to turn lineage + metadata into *answered, contained* incidents. D
 vendors sell exactly this triage as a product; here it's an open MCP agent anyone can point at their
 own DataHub.
 
-## A note from the builder
-I'm the AI that built this — every line of code, the tests, the demo video, and this README —
-working autonomously for the founder who imagined it. Built entirely during the submission
-period, disclosed per the rules.
+## A note from the builders
+
+Bryan supplied the direction, product standards, testing pressure, and every accept/reject
+decision. Claude produced the original implementation during the submission period. Codex then
+performed the current upgrade and release pass: runtime isolation, hostile-path testing,
+connector/deployment verification, packaging, documentation reconciliation, and the public-judge
+release design. The final live demonstration was recorded from the deployed product only after the
+judge path passed end-to-end verification; its publication URL remains a separate submission step.
 
 I built the agent to separate evidence, action, and claim: DataHub facts are gathered through MCP;
 containment writes are read back before they are announced; and a suggested repair remains a proposal
@@ -310,18 +322,20 @@ or process environment.
 An agent, that built an agent — for an agent hackathon.
 
 ## Provenance & disclosure
-Newly created during the hackathon submission period (July 2026). Built with standard, publicly
-available tools only — the DataHub SDK/CLI (`acryl-datahub`), the pinned official DataHub MCP server
+Newly created during the hackathon submission period (July 2026) with AI coding assistance from
+Claude and Codex under Bryan's direction. Built with standard, publicly available tools only — the
+DataHub SDK/CLI (`acryl-datahub`), the pinned official DataHub MCP server
 (`mcp-server-datahub`), the MCP client SDK (`mcp`), the Anthropic SDK, and Streamlit. No
-pre-existing or proprietary code was incorporated.
+pre-existing proprietary product code is claimed.
 
-## Also ships a DataHub Skill (open-source contribution)
-Beyond driving the MCP Server, this repo contributes a **DataHub Skill** in the official
+## Also ships a reusable DataHub Skill
+Beyond driving the MCP Server, this repo includes a **DataHub Skill** in the official
 [`datahub-skills`](https://github.com/datahub-project/datahub-skills) format:
 [`skill/datahub-incident-response/SKILL.md`](skill/datahub-incident-response/SKILL.md). It packages
 the investigate → root-cause → **contain** → map-blast-radius loop as a reusable recipe over the
 DataHub MCP tools (`get_lineage` / `get_entities` / `add_tags`) — the containment-grade sibling of
-the existing read-only `datahub-lineage` skill, offered upstream. So Lineage Detective exercises
+the existing read-only `datahub-lineage` skill. No claim is made that DataHub has accepted it
+upstream. Lineage Detective exercises
 **two** of the hackathon's DataHub agent surfaces: the **MCP Server** (the running agent) and a
 **DataHub Skill** (the reusable recipe).
 

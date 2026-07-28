@@ -29,19 +29,26 @@ from mcp.client.streamable_http import streamable_http_client
 
 try:
     from .network_policy import validate_network_url, validate_resolution
+    from .runtime_mode import is_bundled_catalog_url, is_self_hosted
 except ImportError:
     from network_policy import validate_network_url, validate_resolution
+    from runtime_mode import is_bundled_catalog_url, is_self_hosted
 
 
 def _server_command() -> tuple[str, list[str]]:
-    """Resolve how to launch the DataHub MCP server, most-specific first, so this runs on a
-    judge's machine as well as ours:
+    """Resolve the hash-locked DataHub MCP server selected by quickstart.
+
+    Release execution accepts:
       1. DATAHUB_MCP_EXECUTABLE exact executable selected by quickstart,
-      2. DATAHUB_MCP_CMD env override (full command line),
-      3. an installed `mcp-server-datahub` console script on PATH,
-      4. the pinned `mcp-server-datahub` script installed in this project's .venv,
-      5. `uvx mcp-server-datahub==0.6.0` as a documented fallback.
+      2. the root-owned packaged sidecar in the public container,
+      3. the executable installed in this project's hash-locked sidecar.
+
+    An unpinned PATH/command override is available only with the explicit
+    LINEAGE_ALLOW_UNPINNED_MCP=1 developer opt-in. There is no execution-time
+    uv/uvx install fallback in the release path.
     """
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sidecar_root = os.path.realpath(os.path.join(project_root, ".datahub-mcp-venv"))
     selected_exe = os.environ.get("DATAHUB_MCP_EXECUTABLE")
     if selected_exe:
         if not os.path.isfile(selected_exe):
@@ -49,29 +56,53 @@ def _server_command() -> tuple[str, list[str]]:
                 "DATAHUB_MCP_EXECUTABLE was selected by setup but is no longer present: "
                 f"{selected_exe}. Re-run quickstart.py."
             )
-        return selected_exe, []
-    override = os.environ.get("DATAHUB_MCP_CMD")
-    if override:
-        parts = override.split()
-        return parts[0], parts[1:]
-    exe = shutil.which("mcp-server-datahub")
-    if exe:
-        return exe, []
-    local_scripts = os.path.dirname(sys.executable)
-    local_exe = os.path.join(local_scripts, "mcp-server-datahub.exe" if os.name == "nt" else "mcp-server-datahub")
-    if os.path.exists(local_exe):
-        return local_exe, []
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        resolved_selected = os.path.realpath(selected_exe)
+        try:
+            selected_is_locked_sidecar = (
+                os.path.commonpath([sidecar_root, resolved_selected]) == sidecar_root
+                and not os.path.islink(selected_exe)
+            )
+        except ValueError:
+            # Windows raises when the selected executable and project sidecar
+            # resolve to different drives. That is outside the locked sidecar,
+            # not an internal error that should bypass the release boundary.
+            selected_is_locked_sidecar = False
+        packaged_exe = os.path.realpath(
+            "/opt/datahub-sidecar/bin/mcp-server-datahub"
+        )
+        selected_is_packaged_sidecar = (
+            os.environ.get("LINEAGE_RUN_MODE") == "public_judge"
+            and os.environ.get("LINEAGE_BUNDLED_DATAHUB") == "1"
+            and resolved_selected == packaged_exe
+            and not os.path.islink(selected_exe)
+        )
+        if (
+            not (selected_is_locked_sidecar or selected_is_packaged_sidecar)
+            and os.environ.get("LINEAGE_ALLOW_UNPINNED_MCP") != "1"
+        ):
+            raise PermissionError(
+                "DATAHUB_MCP_EXECUTABLE is outside the hash-locked project sidecar. "
+                "Run quickstart.py or explicitly opt into a development override."
+            )
+        return resolved_selected, []
     sidecar_exe = os.path.join(
         project_root, ".datahub-mcp-venv", "Scripts" if os.name == "nt" else "bin",
         "mcp-server-datahub.exe" if os.name == "nt" else "mcp-server-datahub",
     )
     if os.path.exists(sidecar_exe):
         return sidecar_exe, []
-    uvx = shutil.which("uvx")
-    if uvx:
-        return uvx, ["mcp-server-datahub==0.6.0"]
-    return sys.executable, ["-m", "uv", "tool", "run", "mcp-server-datahub==0.6.0"]
+    if os.environ.get("LINEAGE_ALLOW_UNPINNED_MCP") == "1":
+        override = os.environ.get("DATAHUB_MCP_CMD")
+        if override:
+            parts = override.split()
+            return parts[0], parts[1:]
+        exe = shutil.which("mcp-server-datahub")
+        if exe:
+            return exe, []
+    raise FileNotFoundError(
+        "The hash-locked DataHub MCP sidecar is not installed. Run quickstart.py. "
+        "For an intentional development-only override, set LINEAGE_ALLOW_UNPINNED_MCP=1."
+    )
 
 
 def _startup_timeout_from(error: BaseException) -> TimeoutError | None:
@@ -93,11 +124,14 @@ class MCPDataHub:
                  enable_mutations: bool = True, startup_timeout: float = 45.0,
                  tool_timeout: float = 30.0,
                  server_command: tuple[str, list[str]] | None = None,
-                 mcp_url: str | None = None):
+                 mcp_url: str | None = None,
+                 entity_batch_size: int | None = None):
         self.gms_url = gms_url or os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
         self.token = token if token is not None else os.environ.get("DATAHUB_GMS_TOKEN", "")
         self.mcp_url = mcp_url or os.environ.get("DATAHUB_MCP_URL")
-        self.allow_private_network = os.environ.get("HOSTED_MODE") != "1"
+        self.allow_private_network = (
+            is_self_hosted() or is_bundled_catalog_url(self.gms_url)
+        )
         self.gms_url = validate_network_url(
             self.gms_url,
             allow_private=self.allow_private_network,
@@ -114,6 +148,18 @@ class MCPDataHub:
         # "Connecting" indefinitely. Individual tool calls retain their own timeout.
         self.startup_timeout = max(float(startup_timeout), 0.1)
         self.tool_timeout = max(float(tool_timeout), 0.1)
+        configured_batch_size = (
+            entity_batch_size
+            if entity_batch_size is not None
+            else os.environ.get("LINEAGE_MCP_ENTITY_BATCH_SIZE", "3")
+        )
+        try:
+            parsed_batch_size = int(configured_batch_size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "LINEAGE_MCP_ENTITY_BATCH_SIZE must be an integer between 1 and 10."
+            ) from exc
+        self.entity_batch_size = min(max(parsed_batch_size, 1), 10)
         self._server_command_override = server_command
         self.tools: set[str] = set()
         # The MCP session lives entirely inside one task on a dedicated thread, so every anyio
@@ -122,14 +168,26 @@ class MCPDataHub:
         self._reqq: "queue.Queue" = queue.Queue()
         self._ready = threading.Event()
         self._open_error: BaseException | None = None
+        self._startup_phase = "not_started"
+
+    def _set_startup_phase(self, phase: str) -> None:
+        self._startup_phase = phase
+        if os.environ.get("LINEAGE_MCP_DEBUG") == "1":
+            print(
+                f"LINEAGE_MCP_CLIENT phase={phase}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     # ---- lifecycle -------------------------------------------------------------
     def __enter__(self) -> "MCPDataHub":
+        self._set_startup_phase("thread_start")
         self._thread = threading.Thread(target=self._run, name="datahub-mcp", daemon=True)
         self._thread.start()
         if not self._ready.wait(self.startup_timeout + 2):
             self._open_error = TimeoutError(
-                f"DataHub MCP did not initialize within {self.startup_timeout:.1f}s. "
+                f"DataHub MCP did not become ready within {self.startup_timeout:.1f}s; "
+                f"last startup phase={self._startup_phase}. "
                 "Check the catalog connection and retry."
             )
             self._reqq.put(None)
@@ -167,16 +225,29 @@ class MCPDataHub:
     async def _serve_stdio(self) -> None:
         """Use the isolated official MCP subprocess for local/Core/GMS deployments."""
         cmd, args = self._server_command_override or _server_command()
+        if os.environ.get("LINEAGE_MCP_DEBUG") == "1":
+            # The official CLI's debug mode records MCP request/response
+            # boundaries. Release bootstrap enables it only for the private
+            # verification probe so a production hang is diagnosable without
+            # changing the normal judge-session tool surface.
+            args = [*args, "--debug"]
         env = dict(os.environ)
         env["DATAHUB_GMS_URL"] = self.gms_url
         env["DATAHUB_GMS_TOKEN"] = self.token or ""
         env["TOOLS_IS_MUTATION_ENABLED"] = "true" if self.enable_mutations else "false"
+        # DataHub CLI telemetry is optional. In an egress-restricted judge
+        # container its analytics retries can block the MCP process before it
+        # answers the protocol initialize request. Keep the catalog path real,
+        # but make startup independent of an unrelated telemetry endpoint.
+        env["DATAHUB_TELEMETRY_ENABLED"] = "false"
         # This agent never calls the optional document-search tools. Disabling that surface
         # prevents the official server from running a catalog-wide document-existence query
         # during every startup while preserving lineage, entity, search, and tag operations.
         env["DATAHUB_MCP_DOCUMENT_TOOLS_DISABLED"] = "true"
         params = StdioServerParameters(command=cmd, args=args, env=env)
+        self._set_startup_phase("launching_stdio_server")
         async with stdio_client(params) as (read, write):
+            self._set_startup_phase("stdio_connected")
             async with ClientSession(read, write) as session:
                 await self._serve_session(session)
 
@@ -200,15 +271,16 @@ class MCPDataHub:
 
     async def _serve_session(self, session: ClientSession) -> None:
         """Initialize either transport once, then service synchronous facade requests."""
+        self._set_startup_phase("initialize_request")
         try:
             await asyncio.wait_for(session.initialize(), timeout=self.startup_timeout)
         except asyncio.TimeoutError as exc:
             raise TimeoutError(
                 f"DataHub MCP did not initialize within {self.startup_timeout:.1f}s. "
+                f"last startup phase={self._startup_phase}. "
                 "Check the catalog connection and retry."
             ) from exc
-        listed = await session.list_tools()
-        self.tools = {t.name for t in listed.tools}
+        self._set_startup_phase("ready")
         self._ready.set()
         loop = asyncio.get_event_loop()
         while True:
@@ -221,6 +293,13 @@ class MCPDataHub:
                     session.call_tool(tool, targs), timeout=self.tool_timeout
                 )
                 text = "".join(getattr(c, "text", "") for c in (res.content or []))
+                if getattr(res, "isError", False):
+                    raise RuntimeError(
+                        f"DataHub MCP tool '{tool}' returned an error: {text[:500]}"
+                    )
+                # A completed call is stronger capability evidence than a
+                # tools/list advertisement. Record only executed tools.
+                self.tools.add(tool)
                 fut.set_result(text)
             except asyncio.TimeoutError:
                 fut.set_exception(TimeoutError(
@@ -301,23 +380,49 @@ class MCPDataHub:
         return [r.get("entity", {}) for r in results if r.get("entity")]
 
     def get_entities(self, urns: list[str]) -> dict[str, dict]:
-        """Call the MCP `get_entities` tool; return {urn: entity_dict} with full metadata."""
+        """Read full metadata in bounded MCP batches.
+
+        The official server resolves each entity through a detailed GraphQL
+        fragment. A large list can exceed a truthful per-tool response budget
+        on a newly started catalog even when every entity is healthy. Small
+        batches preserve the official MCP path and fail the whole read if any
+        batch fails rather than returning silently partial evidence.
+        """
         urns = [u for u in dict.fromkeys(urns) if u]
         if not urns:
             return {}
-        text = self._call("get_entities", {"urns": urns})
-        data = self._loads(text)
-        entities = data if isinstance(data, list) else (data.get("entities", []) if data else [])
-        return {e.get("urn"): e for e in entities if isinstance(e, dict) and e.get("urn")}
+        merged: dict[str, dict] = {}
+        for offset in range(0, len(urns), self.entity_batch_size):
+            batch = urns[offset:offset + self.entity_batch_size]
+            text = self._call("get_entities", {"urns": batch})
+            data = self._loads(text)
+            entities = (
+                data
+                if isinstance(data, list)
+                else (data.get("entities", []) if data else [])
+            )
+            merged.update({
+                e.get("urn"): e
+                for e in entities
+                if isinstance(e, dict) and e.get("urn")
+            })
+        return merged
 
     def add_tag(self, entity_urn: str, tag_urn: str) -> bool:
         """Call the MCP `add_tags` tool, then read the entity back to PROVE the tag stuck."""
-        if "add_tags" not in self.tools:
-            return False
         self._call("add_tags", {"tag_urns": [tag_urn], "entity_urns": [entity_urn]})
         check = self.get_entities([entity_urn]).get(entity_urn, {})
         applied = tag_urn in _tag_urns(check)
         return applied
+
+    def remove_tag(self, entity_urn: str, tag_urn: str) -> bool:
+        """Call MCP `remove_tags`, then prove the tag is absent on readback."""
+        self._call(
+            "remove_tags",
+            {"tag_urns": [tag_urn], "entity_urns": [entity_urn]},
+        )
+        check = self.get_entities([entity_urn]).get(entity_urn, {})
+        return tag_urn not in _tag_urns(check)
 
 
 def _tag_urns(entity: dict) -> list[str]:

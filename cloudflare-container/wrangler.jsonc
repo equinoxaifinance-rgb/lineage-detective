@@ -2,14 +2,19 @@
   "name": "lineage-detective",
   "main": "src/index.js",
   "compatibility_date": "2026-07-26",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "containers": [
     {
       "max_instances": 2,
       "class_name": "LineageDetectiveContainer",
-      "image": "../Dockerfile",
+      "image": "../cloudflare-fullstack/Dockerfile",
       "image_build_context": "..",
-      "instance_type": "lite",
-      "rollout_step_percentage": 100
+      "instance_type": "standard-4",
+      "rollout_step_percentage": 100,
+      "authorized_keys": []
     }
   ],
   "durable_objects": {

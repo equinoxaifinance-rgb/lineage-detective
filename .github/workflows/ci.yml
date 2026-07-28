@@ -13,8 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Scan repository history for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.11"
           cache: pip
@@ -23,11 +27,38 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-runtime.lock
       - name: Verify dependency graph
         run: python -m pip check
+      - name: Audit locked Python dependencies
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: requirements-runtime.lock
+          require-hashes: true
+          disable-pip: true
       - name: Compile source
         run: python -m compileall -q app.py src tests quickstart.py tools
+      - name: Check container bootstrap shell
+        run: shellcheck cloudflare-fullstack/start.sh
       - name: Run complete hermetic suite
         run: python -m unittest discover -s tests -q
       - name: Verify packaged dependency boundary
         run: python tools/verify_security_boundary.py
       - name: Verify committed example receipts and hashes
         run: python tools/verify_release_examples.py
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            judge-gateway/package-lock.json
+            cloudflare-container/package-lock.json
+      - name: Install and verify judge gateway
+        run: |
+          npm ci --prefix judge-gateway
+          npm run check --prefix judge-gateway
+          npm test --prefix judge-gateway
+          npm audit --audit-level=moderate --prefix judge-gateway
+          npm run deploy:dry-run --prefix judge-gateway
+      - name: Install and dry-run hosted container Worker
+        run: |
+          npm ci --prefix cloudflare-container
+          npm audit --audit-level=moderate --prefix cloudflare-container
+          npm run deploy:dry-run --prefix cloudflare-container

@@ -8,13 +8,17 @@ from __future__ import annotations
 import shutil
 import inspect
 import hashlib
+import json
+import os
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
+from threading import Event
 from unittest import mock
 
 
@@ -25,9 +29,15 @@ import repair  # noqa: E402
 
 
 class Node:
-    def __init__(self, urn: str, columns: list[str]):
+    def __init__(
+        self,
+        urn: str,
+        columns: list[str],
+        custom_properties: dict[str, str] | None = None,
+    ):
         self.urn = urn
         self.schema_fields = columns
+        self.custom_properties = custom_properties or {}
 
 
 class FakeBlock:
@@ -140,6 +150,34 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(proposal["state"], "proposal_rejected")
         self.assertIn("unapproved dbt relations", proposal["reason"])
 
+    def test_second_run_does_not_stack_an_identical_repair(self):
+        fixed = (
+            "select order_id, coalesce(status, 'unknown') as status "
+            "from {{ ref('raw_orders') }}\n"
+        )
+        llm = FakeLLM({
+            "applicable": True,
+            "fixed_sql": fixed,
+            "rationale": "The current file already contains the evidence-bound correction.",
+        })
+        proposal = repair.propose_repair(
+            llm,
+            {
+                "summary": "Recheck the previously repaired order status path.",
+                "suspects": [{"urn": "urn:x", "why": "verify current state"}],
+            },
+            [Node("urn:x", ["order_id", "status"])],
+            target_artifact={
+                "path": "C:/repo/models/orders.sql",
+                "file_name": "orders.sql",
+                "sql": fixed,
+            },
+        )
+        self.assertEqual(proposal["state"], "no_change_required")
+        self.assertTrue(proposal["verified"])
+        self.assertFalse(proposal["attempted"])
+        self.assertIn("Downstream health", proposal["boundary"])
+
     def test_partial_load_gets_a_verified_volume_guard_instead_of_a_fake_data_repair(self):
         report = {
             "summary": "The upstream orders ingestion silently loaded 44% fewer rows.",
@@ -197,6 +235,39 @@ class RepairTests(unittest.TestCase):
         self.assertFalse(proposal["attempted"])
         self.assertIn("email_address as email", proposal["fixed_sql"])
         self.assertIn("explicit approval", proposal["approval_required"].lower())
+
+    def test_live_schema_evidence_compiles_repair_when_model_wording_is_unhelpful(self):
+        unhelpful_report = {
+            "summary": "The affected output changed unexpectedly.",
+            "suspects": [{
+                "urn": "urn:li:dataset:(urn:li:dataPlatform:bigquery,prod.raw.customers,PROD)",
+                "why": "The evidence points to the customer source.",
+            }],
+        }
+        live_evidence = [
+            Node(
+                "urn:li:dataset:(urn:li:dataPlatform:bigquery,prod.raw.customers,PROD)",
+                ["customer_id", "full_name", "email", "email_address", "created_at"],
+                {"crm_export_version": "v2 (effective 2026-07-11)"},
+            ),
+            Node(
+                "urn:li:dataset:(urn:li:dataPlatform:dbt,analytics.staging.stg_customers,PROD)",
+                ["customer_id", "full_name", "email", "created_at"],
+                {
+                    "email_null_rate_current": "1.00",
+                    "email_null_rate_prior": "0.02",
+                },
+            ),
+        ]
+        proposal = repair.propose_repair(
+            FakeLLM({"applicable": False, "fixed_sql": None, "rationale": "No change."}),
+            unhelpful_report,
+            live_evidence,
+        )
+        self.assertEqual(proposal["state"], "approval_required")
+        self.assertEqual(proposal["proposal_mode"], "evidence_compiled")
+        self.assertIn("email_address as email", proposal["fixed_sql"])
+        self.assertIn("null-rate", proposal["rationale"])
 
     def test_unapproved_proposal_cannot_run(self):
         proposal = repair.propose_repair(None, schema_drift_report(), evidence(), fix_generator=fake_generator)
@@ -393,6 +464,144 @@ class RepairTests(unittest.TestCase):
             self.assertEqual(result["state"], "apply_rejected")
             self.assertIn("changed after", result["error"])
             self.assertEqual(target.read_bytes(), b"select later_human_edit\n")
+
+    def test_apply_rejects_target_outside_explicit_allowed_root(self):
+        original = b"select legacy_email as email\n"
+        receipt = verified_receipt(VALID_SQL, original)
+        with tempfile.TemporaryDirectory() as allowed, tempfile.TemporaryDirectory() as other:
+            target = Path(other) / "stg_customers.sql"
+            target.write_bytes(original)
+            result = repair.apply_verified_repair(
+                receipt,
+                target_file=target,
+                approval="hosted-session-apply",
+                allowed_root=allowed,
+            )
+            self.assertFalse(result["applied"])
+            self.assertIn("allowed workspace", result["error"])
+            self.assertEqual(target.read_bytes(), original)
+
+    def test_crlf_source_hash_survives_text_decoding_and_can_apply(self):
+        original = b"select legacy_email as email\r\n"
+        receipt = verified_receipt(VALID_SQL, original)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "stg_customers.sql"
+            target.write_bytes(original)
+            applied = repair.apply_verified_repair(
+                receipt,
+                target_file=target,
+                approval="unit-test-crlf-apply",
+            )
+            self.assertTrue(applied["applied"], applied)
+            self.assertEqual(target.read_bytes(), VALID_SQL.encode("utf-8"))
+
+    def test_two_writers_cannot_both_enter_the_same_apply_window(self):
+        original = b"select legacy_email as email\n"
+        receipt = verified_receipt(VALID_SQL, original)
+        entered = Event()
+        release = Event()
+        real_atomic = repair._atomic_write
+
+        def slow_atomic(path, data):
+            entered.set()
+            release.wait(timeout=5)
+            return real_atomic(path, data)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "stg_customers.sql"
+            target.write_bytes(original)
+            with mock.patch.object(repair, "_atomic_write", side_effect=slow_atomic):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    first = pool.submit(
+                        repair.apply_verified_repair,
+                        receipt,
+                        target_file=target,
+                        approval="first",
+                    )
+                    self.assertTrue(entered.wait(timeout=3))
+                    second = pool.submit(
+                        repair.apply_verified_repair,
+                        receipt,
+                        target_file=target,
+                        approval="second",
+                    ).result(timeout=3)
+                    self.assertEqual(second["state"], "apply_busy")
+                    self.assertFalse(second["applied"])
+                    release.set()
+                    self.assertTrue(first.result(timeout=5)["applied"])
+
+    def test_dead_process_lock_is_reclaimed_without_manual_cleanup(self):
+        original = b"select legacy_email as email\n"
+        receipt = verified_receipt(VALID_SQL, original)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "stg_customers.sql"
+            target.write_bytes(original)
+            lock = target.with_name(f".{target.name}.lineage-detective.lock")
+            lock.write_text(
+                '{"created_unix": 1, "pid": 999999999, "token": "dead-owner"}',
+                encoding="utf-8",
+            )
+            result = repair.apply_verified_repair(
+                receipt,
+                target_file=target,
+                approval="reclaim-dead-lock",
+            )
+            self.assertTrue(result["applied"], result)
+            self.assertFalse(lock.exists())
+
+    def test_unprobeable_live_process_lock_is_not_stolen(self):
+        original = b"select legacy_email as email\n"
+        receipt = verified_receipt(VALID_SQL, original)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "stg_customers.sql"
+            target.write_bytes(original)
+            lock = target.with_name(f".{target.name}.lineage-detective.lock")
+            lock.write_text(
+                json.dumps({
+                    "created_unix": time.time(),
+                    "pid": os.getpid(),
+                    "token": "unprobeable-owner",
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch.object(repair.os, "kill", side_effect=PermissionError):
+                result = repair.apply_verified_repair(
+                    receipt,
+                    target_file=target,
+                    approval="must-not-steal",
+                )
+            self.assertEqual(result["state"], "apply_busy")
+            self.assertFalse(result["applied"])
+            self.assertEqual(target.read_bytes(), original)
+            self.assertTrue(lock.exists())
+
+    def test_human_edit_after_backup_is_not_overwritten(self):
+        original = b"select legacy_email as email\n"
+        human = b"select human_edit\n"
+        receipt = verified_receipt(VALID_SQL, original)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "stg_customers.sql"
+            target.write_bytes(original)
+            real_read = Path.read_bytes
+            target_reads = 0
+
+            def intercept_read(path):
+                nonlocal target_reads
+                if path == target:
+                    target_reads += 1
+                    if target_reads == 2:
+                        path.write_bytes(human)
+                return real_read(path)
+
+            with mock.patch.object(Path, "read_bytes", intercept_read):
+                result = repair.apply_verified_repair(
+                    receipt,
+                    target_file=target,
+                    approval="human-race",
+                )
+            self.assertEqual(result["state"], "apply_rejected")
+            self.assertIn("during implementation", result["error"])
+            self.assertEqual(target.read_bytes(), human)
 
     def test_failed_apply_rolls_back_and_returns_a_receipt_instead_of_crashing(self):
         original = b"select legacy_email as email\n"

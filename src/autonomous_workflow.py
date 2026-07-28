@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 try:
-    from .deployment_workflow import run_verified_deployment
+    from .deployment_workflow import run_verified_deployment, verify_deployment_receipt
     from .repair import (
         apply_verified_repair,
         build_handoff_packet,
@@ -19,7 +19,7 @@ try:
         verify_sandbox_receipt,
     )
 except ImportError:  # App adds src/ to sys.path and imports this module directly.
-    from deployment_workflow import run_verified_deployment
+    from deployment_workflow import run_verified_deployment, verify_deployment_receipt
     from repair import (
         apply_verified_repair,
         build_handoff_packet,
@@ -37,6 +37,7 @@ def run_approved_workflow(
     sandbox_runner: Callable[..., dict[str, Any]] | None = None,
     handoff_builder: Callable[[dict[str, Any]], bytes] | None = None,
     applier: Callable[..., dict[str, Any]] | None = None,
+    apply_allowed_root: str | None = None,
     deployment_profile: dict[str, Any] | None = None,
     deployment_runner: Callable[..., dict[str, Any]] | None = None,
     allow_local_deployment: bool = False,
@@ -78,11 +79,10 @@ def run_approved_workflow(
     apply_receipt = None
     deployment_receipt = None
     if apply_target:
-        apply_receipt = apply_repair(
-            receipt,
-            target_file=apply_target,
-            approval=approval,
-        )
+        apply_kwargs = {"target_file": apply_target, "approval": approval}
+        if apply_allowed_root:
+            apply_kwargs["allowed_root"] = apply_allowed_root
+        apply_receipt = apply_repair(receipt, **apply_kwargs)
         if not apply_receipt.get("applied"):
             return {
                 "state": "apply_not_verified",
@@ -110,7 +110,8 @@ def run_approved_workflow(
             allow_local_execution=allow_local_deployment,
             on_progress=on_progress,
         )
-        if deployment_receipt.get("verified") is not True:
+        deployment_valid, _deployment_reason = verify_deployment_receipt(deployment_receipt)
+        if not deployment_valid:
             return {
                 "state": "deployment_not_verified",
                 "verified": False,

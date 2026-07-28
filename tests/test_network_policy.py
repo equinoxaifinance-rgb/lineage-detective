@@ -76,6 +76,24 @@ class NetworkPolicyTests(unittest.TestCase):
                     mcp_url="https://mcp.example/mcp",
                 )
 
+    def test_public_container_can_reach_only_its_explicit_bundled_gms(self):
+        from src.datahub_mcp import MCPDataHub
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "LINEAGE_RUN_MODE": "public_judge",
+                "LINEAGE_BUNDLED_DATAHUB": "1",
+                "DATAHUB_MCP_URL": "",
+            },
+            clear=True,
+        ):
+            client = MCPDataHub(gms_url="http://127.0.0.1:8080")
+            self.assertTrue(client.allow_private_network)
+            self.assertEqual(client.gms_url, "http://127.0.0.1:8080")
+            with self.assertRaisesRegex(ValueError, "HTTPS"):
+                MCPDataHub(gms_url="http://10.0.0.4:8080")
+
 
 if __name__ == "__main__":
     unittest.main()

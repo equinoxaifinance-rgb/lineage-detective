@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import patch
 
@@ -5,6 +6,32 @@ from src import setup_vocab
 
 
 class VocabularySetupTests(unittest.TestCase):
+    def test_public_bundled_catalog_can_verify_vocabulary_without_a_browser_token(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "LINEAGE_RUN_MODE": "public_judge",
+                    "LINEAGE_BUNDLED_DATAHUB": "1",
+                },
+                clear=True,
+            ),
+            patch.object(setup_vocab.os.path, "exists", return_value=False),
+            patch.object(
+                setup_vocab,
+                "_ensure_via_graphql",
+                return_value=["QUARANTINE_INCIDENT", "IMPACTED_BY_INCIDENT"],
+            ) as graphql,
+        ):
+            names = setup_vocab.ensure_incident_vocabulary(
+                "http://127.0.0.1:8080"
+            )
+        self.assertEqual(
+            names,
+            ["QUARANTINE_INCIDENT", "IMPACTED_BY_INCIDENT"],
+        )
+        graphql.assert_called_once_with("http://127.0.0.1:8080", None)
+
     def test_graphql_fallback_reads_existing_tags_without_mutating(self):
         calls = []
 

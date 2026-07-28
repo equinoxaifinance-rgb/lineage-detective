@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.deployment_workflow import run_verified_deployment
+from src.deployment_workflow import run_verified_deployment, verify_deployment_receipt
 
 
 def _hash_json(value: dict) -> str:
@@ -94,6 +94,23 @@ class VerifiedDeploymentTests(unittest.TestCase):
             self.assertNotIn("SECRET_OUTPUT", str(receipt))
             self.assertNotIn("SECRET_ERROR", str(receipt))
             self.assertEqual(len(receipt["deployment_receipt_sha256"]), 64)
+            self.assertEqual(verify_deployment_receipt(receipt), (True, "verified"))
+
+    def test_tampered_success_receipt_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apply_receipt, _target, _original, _proposed = self._applied(root)
+            receipt = run_verified_deployment(
+                apply_receipt,
+                profile=self._profile(root),
+                approval="approved",
+                allow_local_execution=True,
+                command_runner=SequenceRunner([True, True]),
+            )
+            receipt["profile_name"] = "tampered"
+            valid, reason = verify_deployment_receipt(receipt)
+            self.assertFalse(valid)
+            self.assertIn("integrity", reason.lower())
 
     def test_failed_live_check_restores_source_and_verifies_rollback(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -167,6 +184,31 @@ class VerifiedDeploymentTests(unittest.TestCase):
             )
             self.assertFalse(receipt["verified"])
             self.assertTrue(receipt["rollback_verified"])
+            self.assertEqual(target.read_bytes(), original)
+
+    def test_cancel_before_deploy_restores_local_bytes_without_external_rollback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apply_receipt, target, original, _proposed = self._applied(root)
+            runner = SequenceRunner([])
+
+            def cancel_before_deploy(phase, _detail):
+                if phase == "deploying":
+                    raise RuntimeError("cancel requested")
+
+            receipt = run_verified_deployment(
+                apply_receipt,
+                profile=self._profile(root),
+                approval="approved",
+                allow_local_execution=True,
+                command_runner=runner,
+                on_progress=cancel_before_deploy,
+            )
+            self.assertEqual(runner.calls, [])
+            self.assertFalse(receipt["deploy_attempted"])
+            self.assertFalse(receipt["rollback_attempted"])
+            self.assertFalse(receipt["rollback_verified"])
+            self.assertEqual(receipt["state"], "deployment_not_attempted_restore_verified")
             self.assertEqual(target.read_bytes(), original)
 
     def test_tampered_apply_receipt_stops_before_any_command(self):

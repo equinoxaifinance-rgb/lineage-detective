@@ -17,9 +17,13 @@ engineer would — nothing in the catalog says "I am the cause":
 The clue is always a REAL signal — a row-count delta, a schema diff, a freshness gap. The plain-
 English "answer key" that used to sit in a custom property has been removed on purpose.
 """
+import os
+
 from datahub.sdk import DataHubClient, Dataset, Tag
 
-c = DataHubClient(server="http://localhost:8080")
+_server = os.environ.get("DATAHUB_SERVER", "http://localhost:8080")
+_token = os.environ.get("DATAHUB_GMS_TOKEN", "")
+c = DataHubClient(server=_server, token=_token or None)
 
 # Incident vocabulary the agent applies via the MCP add_tags tool. The MCP server validates that a
 # tag entity EXISTS before it can be attached (unlike the raw SDK, which auto-creates), so these
@@ -61,7 +65,58 @@ a_dash = make("looker", "bi.revenue_overview", "Executive Revenue Overview dashb
               {"owner": "carol@bi"}, [("order_day", "date"), ("total_revenue_usd", "number")])
 chain(a_raw, a_stg, a_fct, a_dash)
 
-# ---- B. SCHEMA DRIFT (column rename upstream, old name still used downstream) ------
+# ---- B. SCHEMA DRIFT (six real upstream edges, old name still used downstream) ----
+# The extra source/landing/bronze hops are healthy on purpose. They make the judge's
+# max-depth control prove a genuine six-edge DataHub traversal without planting fake
+# anomalies that could distract the investigator from the real staging-model defect.
+b_source = make(
+    "s3",
+    "prod.crm_exports.customers_v2",
+    "Versioned CRM customer export delivered by the source system.",
+    {
+        "owner": "crm-platform@operations",
+        "latest_run_status": "success",
+        "export_contract": "customers-v2",
+    },
+    [
+        ("customer_id", "number"),
+        ("full_name", "string"),
+        ("email_address", "string"),
+        ("created_at", "timestamp"),
+    ],
+)
+b_landing = make(
+    "bigquery",
+    "prod.landing.crm_customers",
+    "Immutable landing copy of the current CRM customer export.",
+    {
+        "owner": "dan@data-eng",
+        "latest_run_status": "success",
+        "ingestion_mode": "append-and-deduplicate",
+    },
+    [
+        ("customer_id", "number"),
+        ("full_name", "string"),
+        ("email_address", "string"),
+        ("created_at", "timestamp"),
+    ],
+)
+b_bronze = make(
+    "dbt",
+    "analytics.bronze.crm_customers",
+    "Bronze normalization of the landed CRM customer contract.",
+    {
+        "owner": "dan@data-eng",
+        "latest_run_status": "success",
+        "model_type": "source normalization",
+    },
+    [
+        ("customer_id", "number"),
+        ("full_name", "string"),
+        ("email_address", "string"),
+        ("created_at", "timestamp"),
+    ],
+)
 b_raw = make("bigquery", "prod.raw.customers", "Raw customer records from the CRM export.",
              {"owner": "dan@data-eng", "latest_run_status": "success",
               "crm_export_version": "v2 (effective 2026-07-11)"},
@@ -79,7 +134,7 @@ b_dim = make("dbt", "analytics.marts.dim_customers", "Customer dimension feeding
              [("customer_id", "number"), ("full_name", "string"), ("email", "string")])
 b_dash = make("looker", "bi.customer_360", "Customer 360 dashboard (contactability KPIs).",
               {"owner": "carol@bi"}, [("customer_id", "number"), ("email", "string")])
-chain(b_raw, b_stg, b_dim, b_dash)
+chain(b_source, b_landing, b_bronze, b_raw, b_stg, b_dim, b_dash)
 
 # ---- C. STALE / FRESHNESS (job 'succeeds' but adds no rows; latest data frozen) ---
 c_ref = make("bigquery", "prod.ref.exchange_rates", "Daily FX rates reference table.",
@@ -97,7 +152,18 @@ c_dash = make("looker", "bi.finance_fx", "Finance USD-revenue dashboard.",
               {"owner": "frank@finance"}, [("order_day", "date"), ("revenue_usd", "number")])
 chain(c_ref, c_fct, c_dash)
 
+# Dedicated release probe. It is deliberately disconnected from every incident
+# so a reversible add/remove tag test cannot alter the scenarios a judge sees.
+release_probe = make(
+    "datahub",
+    "lineage_detective.release_probe",
+    "Dedicated reversible MCP mutation probe for Lineage Detective release verification.",
+    {"owner": "lineage-detective", "purpose": "release-verification-only"},
+    [("probe_id", "string")],
+)
+
 print("SEEDED 3 incident scenarios (real signals only; no plain-English cause).")
 print("A_PARTIAL_LOAD dashboard=" + a_dash + " root=" + a_raw)
 print("B_SCHEMA_DRIFT dashboard=" + b_dash + " root=" + b_raw)
 print("C_STALE       dashboard=" + c_dash + " root=" + c_ref)
+print("RELEASE_PROBE dataset=" + release_probe)

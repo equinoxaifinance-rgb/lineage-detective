@@ -4,6 +4,7 @@ import unittest
 
 from src import repair as repair_module
 from src.autonomous_workflow import run_approved_workflow
+from src.deployment_workflow import _seal_deployment_receipt
 
 
 class AutonomousWorkflowTests(unittest.TestCase):
@@ -113,7 +114,13 @@ class AutonomousWorkflowTests(unittest.TestCase):
 
         def deploy(apply_receipt, **kwargs):
             calls.append((apply_receipt, kwargs))
-            return {"verified": True, "deployed": True, "state": "deployed_verified"}
+            return _seal_deployment_receipt({
+                "verified": True,
+                "deployed": True,
+                "state": "deployed_verified",
+                "deploy": {"verified": True},
+                "live_verification": {"verified": True},
+            })
 
         result = run_approved_workflow(
             {"repair": {"state": "approval_required", "repair_id": "repair-deploy"}},
@@ -130,6 +137,25 @@ class AutonomousWorkflowTests(unittest.TestCase):
         self.assertTrue(result["deployment_receipt"]["deployed"])
         self.assertEqual(len(calls), 1)
         self.assertTrue(calls[0][1]["allow_local_execution"])
+
+    def test_unsigned_injected_deployment_success_is_rejected(self):
+        result = run_approved_workflow(
+            {"repair": {"state": "approval_required", "repair_id": "repair-forged"}},
+            approval="one-click-user-approval",
+            apply_target="C:/safe/demo.sql",
+            sandbox_runner=lambda *_args, **_kwargs: self._receipt("repair-forged"),
+            applier=lambda *_args, **_kwargs: {"applied": True, "verified": True},
+            handoff_builder=lambda *_args, **_kwargs: b"packet",
+            deployment_profile={"kind": "test"},
+            deployment_runner=lambda *_args, **_kwargs: {
+                "verified": True,
+                "deployed": True,
+                "state": "deployed_verified",
+            },
+            allow_local_deployment=True,
+        )
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["state"], "deployment_not_verified")
 
     def test_failed_deployment_keeps_earlier_receipts_but_blocks_completion(self):
         result = run_approved_workflow(

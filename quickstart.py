@@ -52,7 +52,13 @@ def enter_project_venv() -> None:
     env = dict(os.environ)
     env["LINEAGE_DETECTIVE_IN_VENV"] = "1"
     env["PATH"] = os.path.dirname(py) + os.pathsep + env.get("PATH", "")
-    raise SystemExit(subprocess.run([py, os.path.abspath(__file__)], cwd=HERE, env=env).returncode)
+    raise SystemExit(
+        subprocess.run(
+            [py, os.path.abspath(__file__), *sys.argv[1:]],
+            cwd=HERE,
+            env=env,
+        ).returncode
+    )
 
 
 def ensure_sidecar_venv() -> str:
@@ -156,6 +162,16 @@ def gms_healthy() -> bool:
 
 
 def main():
+    if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+        print(
+            "Lineage Detective self-hosted quickstart\n\n"
+            "Usage:\n"
+            "  python quickstart.py\n\n"
+            "Requires Docker Desktop. Creates project-local Python environments, starts "
+            "DataHub Quickstart, seeds the three reproducible incidents, and launches "
+            "the app at http://localhost:8501. Re-running resumes safely."
+        )
+        return
     enter_project_venv()
     load_dotenv()
     print("=" * 68)
@@ -212,6 +228,7 @@ def main():
     os.environ["DATAHUB_MCP_EXECUTABLE"] = mcp_command
     os.environ["DATAHUB_BOOTSTRAP_PYTHON"] = datahub_py
     os.environ["LINEAGE_DATAHUB_COMPAT_ACTIVE"] = compatibility_mode
+    os.environ["LINEAGE_RUN_MODE"] = "self_hosted"
     # Skip Streamlit's first-run "enter your email" prompt so the judge is never blocked.
     cred = os.path.join(os.path.expanduser("~"), ".streamlit", "credentials.toml")
     if not os.path.exists(cred):

@@ -1,0 +1,3 @@
+# False positive reviewed 2026-07-27: the historical line is the English
+# phrase "credential-free, hash-bound receipt"; it contains no credential.
+cf399905eca73f32c9b2f887d63b8efaacd135b4:UNIVERSAL-REMEDIATION.md:generic-api-key:56

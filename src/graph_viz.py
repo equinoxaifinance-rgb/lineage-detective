@@ -22,6 +22,18 @@ def _platform(urn: str) -> str:
     return m.group(1) if m else ""
 
 
+def _dot_escape(value: str) -> str:
+    """Escape an arbitrary catalog value for a DOT quoted string."""
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r\n", "\\n")
+        .replace("\r", "\\n")
+        .replace("\n", "\\n")
+    )
+
+
 def _walk_edges(client: MCPDataHub, start: str, upstream: bool, max_hops: int,
                 max_nodes: int = 40):
     """Bounded BFS that records real lineage edges in one direction."""
@@ -70,21 +82,23 @@ def lineage_dot(client: MCPDataHub, affected_urn: str, report: dict,
         def node_line(urn: str) -> str:
             name = _short(urn)
             plat = _platform(urn)
-            label = f"{name}\\n({plat})" if plat else name
+            label = f"{name}\n({plat})" if plat else name
+            node_id = _dot_escape(urn)
+            label = _dot_escape(label)
             if urn == root:
                 if containment_confirmed:
-                    return (f'"{urn}" [label="{label}\\n🔒 QUARANTINE", style="filled,bold", '
+                    return (f'"{node_id}" [label="{label}\\n🔒 QUARANTINE", style="filled,bold", '
                             f'fillcolor="#7f1d1d", fontcolor="#fee2e2", color="#ef4444", penwidth=2];')
-                return (f'"{urn}" [label="{label}\\nTOP SUSPECT", style="filled,bold", '
+                return (f'"{node_id}" [label="{label}\\nTOP SUSPECT", style="filled,bold", '
                         f'fillcolor="#164e63", fontcolor="#cffafe", color="#22d3ee", penwidth=2];')
             if urn == affected_urn:
-                return (f'"{urn}" [label="{label}\\n⚠ symptom", style="filled", '
+                return (f'"{node_id}" [label="{label}\\n⚠ symptom", style="filled", '
                         f'fillcolor="#1e3a8a", fontcolor="#dbeafe", color="#60a5fa", penwidth=2];')
             if urn in impacted:
                 impact_label = "IMPACTED" if containment_confirmed else "DOWNSTREAM IMPACT"
-                return (f'"{urn}" [label="{label}\\n{impact_label}", style="filled", '
+                return (f'"{node_id}" [label="{label}\\n{impact_label}", style="filled", '
                         f'fillcolor="#78350f", fontcolor="#fef3c7", color="#f59e0b"];')
-            return f'"{urn}" [label="{label}", style="filled", fillcolor="#1f2937", fontcolor="#e5e7eb", color="#374151"];'
+            return f'"{node_id}" [label="{label}", style="filled", fillcolor="#1f2937", fontcolor="#e5e7eb", color="#374151"];'
 
         lines = ['digraph lineage {', '  rankdir=LR; bgcolor="transparent";',
                  '  node [shape=box, style=filled, fontname="Segoe UI", fontsize=11, margin="0.15,0.08"];',
@@ -93,7 +107,7 @@ def lineage_dot(client: MCPDataHub, affected_urn: str, report: dict,
             lines.append("  " + node_line(u))
         for a, b in edges:
             if a in nodes and b in nodes:
-                lines.append(f'  "{a}" -> "{b}";')
+                lines.append(f'  "{_dot_escape(a)}" -> "{_dot_escape(b)}";')
         lines.append("}")
         return "\n".join(lines)
     except Exception:
