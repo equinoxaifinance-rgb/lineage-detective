@@ -9,22 +9,31 @@
 const MAX_BODY_BYTES = 60_000;
 const MAX_SYSTEM_CHARS = 12_000;
 const MAX_USER_CHARS = 42_000;
-const MAX_OUTPUT_TOKENS = 3_000;
+const MAX_OUTPUT_TOKENS = 6_000;
 const MODEL = "claude-sonnet-5";
 const DEFAULT_DAILY_REQUEST_CAP = 200;
 const DEFAULT_ACCESS_EXPIRES = "2026-09-15T23:59:59Z";
 const REPORT_SCHEMA = {
   type: "object",
   properties: {
-    summary: { type: "string" },
+    summary: {
+      type: "string",
+      description: "A concise evidence-grounded incident summary under 120 words.",
+    },
     suspects: {
       type: "array",
       items: {
         type: "object",
         properties: {
           urn: { type: "string" },
-          why: { type: "string" },
-          check_next: { type: "string" },
+          why: {
+            type: "string",
+            description: "The specific observed signal supporting this suspect, under 120 words.",
+          },
+          check_next: {
+            type: "string",
+            description: "One concrete next check, under 60 words.",
+          },
           owner: { type: ["string", "null"] },
           confidence: { type: "string", enum: ["high", "medium", "low"] },
         },
@@ -32,7 +41,10 @@ const REPORT_SCHEMA = {
         additionalProperties: false,
       },
     },
-    missing_evidence: { type: ["string", "null"] },
+    missing_evidence: {
+      type: ["string", "null"],
+      description: "Only the missing signal needed to resolve uncertainty, under 120 words.",
+    },
   },
   required: ["summary", "suspects", "missing_evidence"],
   additionalProperties: false,

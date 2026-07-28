@@ -65,6 +65,8 @@ Rules:
 - Name the owner to contact for the top suspect if known.
 - If the evidence is insufficient, say exactly what additional signal (an assertion, a run log)
   would resolve it. Never bluff a confident answer the evidence can't support.
+- Keep the summary under 120 words, each why under 120 words, each check_next under 60 words, and
+  missing_evidence under 120 words. Do not repeat evidence or narrate your process.
 Return STRICT JSON: {"summary": str, "suspects": [{"urn": str, "why": str, "check_next": str,
 "owner": str|null, "confidence": "high"|"medium"|"low"}], "missing_evidence": str|null}"""
 
