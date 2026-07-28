@@ -1,96 +1,75 @@
 # Release verification
 
-Verified on 2026-07-28 EDT. This document records executed facts and unresolved
-external gates. It does not claim contest placement or production safety for an
-unknown customer environment.
+Verified on 2026-07-28 EDT. This records executed facts, not contest placement
+or universal production safety in an unknown customer environment.
 
-## Executed release receipts
+## Executed receipts
 
-| Surface | Verification | Result |
+| Surface | Executed verification | Result |
 |---|---|---|
-| Complete Python suite | Canonical aggregate runner over `tests/` | 211 passed, 0 failed, 1 platform skip in 39.559s |
-| Source syntax | `python -m compileall -q /app` inside the packaged image | exit 0 |
-| Python dependency graph | `python -m pip check` inside the packaged image | no broken requirements |
-| Python advisories | `pip-audit==2.10.1` against `requirements-runtime.lock` with hashes and pip resolution disabled | no known vulnerabilities |
-| Runtime privilege | Entry-point drop plus `id -u` in the running application process | user `lineage`, UID 1000 |
-| Packaged startup | Fresh container, Streamlit health endpoint and root HTTP request | health `ok`; root HTTP 200; UID 1000; `.streamlit/config.toml` and current README present |
-| Rendered UI | Fresh in-app browser session against the current runtime image | heading, concise trust disclosure, incident selector, inputs, primary workflow action, and live progress region rendered; fresh browser log contained 0 errors |
-| Missing-catalog UI | Streamlit AppTest in `public_judge` mode with all DataHub catalog variables absent | judge-code field absent; judge lane disabled; no credential requested from the judge; no exception |
-| Docker packaging | Fresh image build runs compilation, the complete suite, the security-boundary verifier, and example verification before export | Final deployment receipt is captured after the last source commit |
-| Windows writer locks | Live two-writer collision plus stale/live-owner probes | Windows-safe process liveness query; no `os.kill(pid, 0)` self-termination; collision refused cleanly |
-| Example artifacts | `python tools/verify_release_examples.py` | 3 cases and every bound artifact verified |
-| Security boundary | `python tools/verify_security_boundary.py` | fixed app runtime; disclosed isolated upstream compatibility boundary |
-| Judge gateway | Node syntax, 8 runtime tests, npm audit, Wrangler dry-run | all passed; 0 vulnerabilities |
-| Hosted app Worker | npm audit and Wrangler dry-run including Container image build | passed; 0 vulnerabilities |
-| Credential redirect defense | Two live local HTTP servers: gateway redirector and collection sink | request rejected at HTTP 307; sink received no request or judge code |
-| CI supply chain | Workflow inspection plus live official tag resolution | actions pinned to exact commit SHAs |
-| Public judge workflow | Fresh browser run against the deployed app | live MCP traced six dependency edges and returned seven entities; containment tag write/readback; model-backed diagnosis; evidence-compiled bounded proposal; sandbox 0/8 -> 8/8; rollback verified; exact safe-copy apply hash matched; all 3 artifacts downloaded |
-| Judge credential | Fresh secret rotation plus authenticated live `/preflight`; independent invalid-code request | valid code HTTP 200 through 2026-09-15; invalid code HTTP 401 |
-| Judge video | Signal QA plus alignment/transcript receipt | 169.733s; one natural-speed narration take; no black or silence events; personal note present |
+| Complete Python suite | `python -m unittest discover -s tests -q` | 213 passed, 0 failed in 32.640s |
+| Python dependencies | `pip check` and hash-locked `pip-audit` | no broken requirements; no known vulnerabilities |
+| Source and examples | compilation, security-boundary verifier, bound-example verifier | all passed |
+| Judge gateway | 10 Node tests, syntax, npm audit, live authenticated provider probe | passed; 0 npm vulnerabilities; schema-valid response hashed |
+| Hosted Worker | syntax, npm audit, Cloudflare deployment readback | passed; hourly warm-up trigger present |
+| Container | packaged test/build gates, public root, Cloudflare health readback | Streamlit HTTP 200; healthy; zero rollout errors; no authorized SSH keys |
+| Public access boundary | authenticated `/preflight` plus independent invalid code | valid invitation accepted through 2026-09-15; invalid code HTTP 401 |
+| Public judge workflow | fresh headless-Chrome run against the deployed URL | 100%; seven entities; six hops; two tag writes read back; all artifacts downloaded |
+| Sandbox repair | downloaded JSON receipt | baseline 0/8; repaired 8/8; rollback verified |
+| Exact-byte implementation | downloaded JSON receipt | `applied_verified`; proposal, expected, and post-write hashes match; backup recorded |
+| Handoff | downloaded ZIP plus archive integrity test | valid archive containing README, diff, model SQL, and embedded sandbox receipt |
+| Public repository | anonymous GitHub API and raw-file reads | public `main`; Apache-2.0; generated example manifest reachable |
+| Public video | local signal/alignment receipts plus YouTube metadata readback | 169.733s; public; no black/silence events in final media QA |
+| Devpost | signed-in field and submission readback | submitted 5/5 with final public and judge-only fields |
 
-The full suite includes normal behavior and hostile paths for malformed model
-output, unobserved URNs, request limits, authentication, rate and spend caps,
-redirects, private-network policy, MCP startup/tool timeouts, concurrent
-writers, stale locks, human edits, rollback failure, receipt tampering,
-connector response loss and partial success, GitHub exact-head PR recovery,
-DataHub assertion readback, Snowflake terminal semantics,
-deployment cancellation, and restoration.
+The public workflow receipt is
+`.release-work/v43-public-workflow-receipt.json`. It binds the downloaded
+artifact sizes and SHA-256 hashes. The corresponding progress timeline proves
+that the run advanced from live DataHub evidence through diagnosis, sandbox,
+rollback, receipt binding, and a terminal 100% state.
 
 ## What the receipts prove
 
-- The packaged application starts and its tested workflows behave as the code
-  claims.
-- The public mode fails closed when its fixed DataHub backend or gateway is not
-  configured; it never substitutes static catalog data.
-- The self-hosted mode can investigate a customer DataHub and can continue a
-  verified change through configured connectors or customer deployment
-  commands.
-- A successful sandbox receipt proves the exact proposal against the included
+- The packaged application starts and the tested judge workflow behaves as the
+  submission claims.
+- DataHub is the evidence and action plane: the run used real catalog entities,
+  lineage, containment writes, and independent readback.
+- The hosted model cannot return a suspect outside the exact evidence-URN set.
+  Truncated or invalid structured output is rejected rather than repaired by
+  invention.
+- The sandbox receipt proves the exact proposal against the included
   representative fixture. It is not a universal production guarantee.
-- A deployment receipt becomes verified only after a separate downstream
-  health check. If that check fails, the controller restores source, runs the
-  customer rollback command, and verifies the prior state.
+- A real customer deployment remains customer-controlled: scoped credentials,
+  an explicit target, a live health check, and a verified rollback path are
+  required.
 
 ## Upstream compatibility boundary
 
 The judge-facing application uses the fixed modern runtime in
-`requirements-runtime.lock`, including `setuptools==83.0.0`. The pinned DataHub
-CLI/SDK/MCP release currently constrains its own environment to
-`setuptools<82`, so those official tools run in a separate checked-in,
-hash-locked sidecar. The app automatically uses a reviewed unified lock when a
-compatible DataHub release exists. No runtime `uv`, `uvx`, PATH discovery, or
-unhashed install is permitted in release mode.
+`requirements-runtime.lock`, including `setuptools==83.0.0`. The pinned
+DataHub CLI/SDK/MCP release constrains its own environment to `setuptools<82`,
+so those official tools run in a separate checked-in, hash-locked sidecar.
+Lineage Detective automatically uses a reviewed unified lock when a compatible
+DataHub release exists.
 
-`tools/verify_security_boundary.py` reports this as an upstream compatibility
-boundary because the isolated DataHub tool process still contains the older
-package. It does not execute untrusted source packages in the app runtime, and
-the normal tested DataHub MCP path works, but it is not mislabeled as an
-upstream fix.
+This is isolation, not concealment and not an upstream fix. The application
+runtime remains current and audit-green while the official DataHub tool
+process retains its declared constraint. No untrusted runtime install or
+PATH-discovered package is permitted in release mode.
 
-## Final synchronization gates
+## Official-rule check
 
-- The final source commit must be pushed and read back anonymously before the
-  repository is called synchronized.
-- The final Container image must be deployed, cold-started, and exercised
-  through the private invitation path before the hosted build is called
-  synchronized.
-- Devpost submission `1077519` already carries the final public video and
-  current product story. Its thumbnail, tagline, judge-only Project URL,
-  sample-output URL, and DataHub technology selections must be saved and read
-  back after the final deployment.
+Primary sources accessed 2026-07-28 EDT:
 
-These release-order gates are tracked in [LIVE-STATUS.md](LIVE-STATUS.md).
+- <https://datahub.devpost.com/>
+- <https://datahub.devpost.com/rules>
 
-## Primary-source rule check
+The entry supplies a working DataHub application, easy judge access, a public
+Apache-2.0 repository with setup instructions and sample outputs, an English
+description, and a public product video under three minutes. Free judge access
+extends beyond the August 31 judging deadline.
 
-Accessed 2026-07-26 EDT:
-
-- Official overview: <https://datahub.devpost.com/>
-- Official rules: <https://datahub.devpost.com/rules>
-
-The official pages require a working DataHub application, easy judge access, a
-public Apache-2.0 repository, a public demonstration video under three minutes
-showing the product in action, and free/unrestricted project access through the
-end of judging. The rules also state that judges may rely only on the
-description, images, and video, so media is deliberately the last release
-artifact rather than a substitute for the current product.
+The optional bonus concerns meaningful contributions submitted upstream to
+DataHub—connectors, skills, fixes, RFCs, or documentation improvements. Lineage
+Detective does not claim that bonus because no such upstream contribution was
+made.

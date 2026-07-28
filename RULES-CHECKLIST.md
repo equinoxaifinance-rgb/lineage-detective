@@ -23,6 +23,7 @@ of judging.
 | Newly built during submission period; prior work disclosed | README provenance section | Owner attestation required |
 | Authorized third-party APIs/data and original ownership | Public dependencies and scoped credentials | Owner attestation required |
 | No prohibited third-party marks/music in video | Final media inspection and signal QA | Green |
+| Optional upstream DataHub contribution bonus | No connector, skill, fix, RFC, or documentation contribution was submitted upstream | Not claimed; field intentionally blank |
 
 ## How the entry maps to judging
 

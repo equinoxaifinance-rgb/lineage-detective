@@ -28,7 +28,7 @@ class JudgeGatewayContractTests(unittest.TestCase):
         self.assertIn('judge-auth-attempt', SOURCE)
         self.assertIn('judge-reasoning', SOURCE)
         self.assertNotIn('${clientIp}:${suppliedCode}', SOURCE)
-        self.assertIn('MAX_OUTPUT_TOKENS = 1_500', SOURCE)
+        self.assertIn('MAX_OUTPUT_TOKENS = 3_000', SOURCE)
         self.assertIn('MAX_BODY_BYTES = 60_000', SOURCE)
         self.assertIn('validOptionalText(body?.system, MAX_SYSTEM_CHARS)', SOURCE)
         self.assertEqual(CONFIG["ratelimits"][0]["simple"]["limit"], 10)

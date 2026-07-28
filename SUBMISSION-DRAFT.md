@@ -1,4 +1,4 @@
-# Lineage Detective — Devpost submission draft
+# Lineage Detective — Devpost submission record
 
 ## Tagline
 
