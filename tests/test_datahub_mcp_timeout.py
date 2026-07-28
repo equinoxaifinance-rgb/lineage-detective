@@ -106,6 +106,50 @@ class McpStartupTimeoutTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "remove_tags"):
             client.remove_tag("urn:li:dataset:test", "urn:li:tag:probe")
 
+    def test_add_tag_waits_for_read_after_write_visibility(self):
+        client = MCPDataHub(enable_mutations=True)
+        client._call = mock.Mock(return_value='{"success": true}')
+        urn = "urn:li:dataset:test"
+        tag = "urn:li:tag:probe"
+        readbacks = iter([
+            {urn: {"urn": urn, "tags": {"tags": []}}},
+            {
+                urn: {
+                    "urn": urn,
+                    "tags": {"tags": [{"tag": {"urn": tag}}]},
+                }
+            },
+        ])
+        client.get_entities = lambda urns: next(readbacks)
+        with mock.patch.dict(
+            os.environ,
+            {"LINEAGE_MCP_MUTATION_READBACK_SECONDS": "1"},
+        ), mock.patch("src.datahub_mcp.time.sleep") as sleep:
+            self.assertTrue(client.add_tag(urn, tag))
+        sleep.assert_called_once()
+
+    def test_remove_tag_waits_for_read_after_write_visibility(self):
+        client = MCPDataHub(enable_mutations=True)
+        client._call = mock.Mock(return_value='{"success": true}')
+        urn = "urn:li:dataset:test"
+        tag = "urn:li:tag:probe"
+        readbacks = iter([
+            {
+                urn: {
+                    "urn": urn,
+                    "tags": {"tags": [{"tag": {"urn": tag}}]},
+                }
+            },
+            {urn: {"urn": urn, "tags": {"tags": []}}},
+        ])
+        client.get_entities = lambda urns: next(readbacks)
+        with mock.patch.dict(
+            os.environ,
+            {"LINEAGE_MCP_MUTATION_READBACK_SECONDS": "1"},
+        ), mock.patch("src.datahub_mcp.time.sleep") as sleep:
+            self.assertTrue(client.remove_tag(urn, tag))
+        sleep.assert_called_once()
+
     def test_startup_does_not_depend_on_tools_list_advertising(self):
         """A real initialized session is usable even if tools/list middleware stalls."""
         fake_server = textwrap.dedent(

@@ -11,6 +11,8 @@ import json
 import os
 import subprocess
 import tempfile
+import time
+import urllib.parse
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,15 +24,17 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / ".release-work"
 APP_URL = (
     "https://lineage-detective.equinoxaifinance.workers.dev/"
-    "?receipt=six-hop-final"
+    "?receipt=private-invitation-final"
 )
 PROTECTED_JUDGE_CODE = ROOT / ".judge-access.dpapi"
 CHROME = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
 
-SANDBOX = OUT / "v41-sandbox-receipt.json"
-IMPLEMENTATION = OUT / "v41-implementation-receipt.json"
-HANDOFF = OUT / "v41-human-handoff.zip"
-RESULT = OUT / "v41-public-workflow-receipt.json"
+SANDBOX = OUT / "v43-sandbox-receipt.json"
+IMPLEMENTATION = OUT / "v43-implementation-receipt.json"
+HANDOFF = OUT / "v43-human-handoff.zip"
+RESULT = OUT / "v43-public-workflow-receipt.json"
+DIAGNOSTIC = OUT / "v43-public-workflow-diagnostic.txt"
+DIAGNOSTIC_SCREENSHOT = OUT / "v43-public-workflow-diagnostic.png"
 
 
 def sha256(path: Path) -> str:
@@ -91,6 +95,30 @@ def main() -> None:
             page.get_by_text("Lineage Detective", exact=True).first.wait_for(
                 state="visible", timeout=180_000
             )
+            run_button = page.get_by_role(
+                "button", name="Approve & run full verified workflow", exact=True
+            )
+            if not run_button.is_disabled():
+                raise RuntimeError("Public workflow was enabled without verified judge access.")
+
+            invitation_url = (
+                f"{APP_URL}&judge={urllib.parse.quote(code, safe='')}"
+            )
+            page.goto(
+                invitation_url,
+                wait_until="domcontentloaded",
+                timeout=60_000,
+            )
+            code = ""
+            invitation_url = ""
+            page.get_by_text("Lineage Detective", exact=True).first.wait_for(
+                state="visible", timeout=180_000
+            )
+            page.get_by_text(
+                "Model-backed judge gateway verified.", exact=False
+            ).wait_for(state="visible", timeout=30_000)
+            if "judge=" in page.url:
+                raise RuntimeError("Private invitation remained in the browser address bar.")
 
             slider = (
                 page.locator('[data-testid="stSlider"]')
@@ -103,32 +131,42 @@ def main() -> None:
             if slider.input_value() != "6":
                 raise RuntimeError("Judge workflow did not select six hops.")
 
-            code_input = page.get_by_label(
-                "Judge access code (from testing instructions)", exact=True
-            )
-            code_input.fill(code)
-            code_input.press("Enter")
-            code = ""
-            page.get_by_text(
-                "Model-backed judge gateway verified.", exact=False
-            ).wait_for(state="visible", timeout=30_000)
-
             page.get_by_role(
                 "button", name="Approve & run full verified workflow", exact=True
             ).click()
-            page.get_by_text(
-                (
-                    "One-click workflow completed this proposal through sandbox "
-                    "verification and the selected finish action. Manual controls remain "
-                    "available in Advanced settings for a new run."
-                ),
-                exact=True,
-            ).wait_for(state="visible", timeout=180_000)
+            progress = page.locator('[aria-label="Verified workflow progress"]')
+            deadline = time.monotonic() + 420
+            body_text = ""
+            while time.monotonic() < deadline:
+                body_text = page.locator("body").inner_text(timeout=15_000)
+                progress_text = (
+                    progress.inner_text(timeout=15_000)
+                    if progress.count()
+                    else ""
+                )
+                if (
+                    "100%" in progress_text
+                    and "2 downstream assets; 2 tag writes confirmed" in body_text
+                    and "Download verified human handoff packet (.zip)" in body_text
+                ):
+                    break
+                if (
+                    "Investigation failed:" in body_text
+                    or "Workflow failed:" in body_text
+                    or "Sandbox trial failed:" in body_text
+                ):
+                    DIAGNOSTIC.write_text(body_text, encoding="utf-8")
+                    page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
+                    raise RuntimeError("Public workflow exposed a visible failure state.")
+                time.sleep(2)
+            else:
+                DIAGNOSTIC.write_text(body_text, encoding="utf-8")
+                page.screenshot(path=str(DIAGNOSTIC_SCREENSHOT), full_page=True)
+                raise RuntimeError("Public workflow did not complete within 420 seconds.")
             page.get_by_text(
                 "Traced 7 entities through live DataHub lineage.", exact=True
             ).wait_for(state="visible", timeout=15_000)
 
-            progress = page.locator('[aria-label="Verified workflow progress"]')
             if "100%" not in progress.inner_text():
                 raise RuntimeError("Public workflow did not expose a completed progress rail.")
             if "2 downstream assets; 2 tag writes confirmed" not in page.locator(
@@ -152,6 +190,9 @@ def main() -> None:
         members = sorted(archive.namelist())
 
     checks = {
+        "public_run_disabled_without_access": True,
+        "private_invitation_verified": True,
+        "private_invitation_removed_from_url": True,
         "six_hops_selected": True,
         "seven_entities_visible": True,
         "progress_100_visible": True,
@@ -176,7 +217,7 @@ def main() -> None:
         value is True for key, value in checks.items() if key != "browser_console_errors"
     ) and not console_errors else "FAIL"
     result = {
-        "schema": "lineage-detective-public-workflow.v41",
+        "schema": "lineage-detective-public-workflow.v43",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
         "app_url": APP_URL,

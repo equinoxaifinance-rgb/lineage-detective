@@ -21,6 +21,7 @@ import queue
 import shutil
 import sys
 import threading
+import time
 
 import httpx
 from mcp import ClientSession, StdioServerParameters
@@ -409,20 +410,46 @@ class MCPDataHub:
         return merged
 
     def add_tag(self, entity_urn: str, tag_urn: str) -> bool:
-        """Call the MCP `add_tags` tool, then read the entity back to PROVE the tag stuck."""
+        """Call MCP `add_tags`, then observe the tag through a bounded readback.
+
+        DataHub's write acknowledgement can arrive before the updated aspect is
+        visible to the next metadata read. Polling the official MCP read surface
+        preserves the proof requirement without treating normal propagation
+        delay as a failed mutation.
+        """
         self._call("add_tags", {"tag_urns": [tag_urn], "entity_urns": [entity_urn]})
-        check = self.get_entities([entity_urn]).get(entity_urn, {})
-        applied = tag_urn in _tag_urns(check)
-        return applied
+        return self._wait_for_tag_state(entity_urn, tag_urn, present=True)
 
     def remove_tag(self, entity_urn: str, tag_urn: str) -> bool:
-        """Call MCP `remove_tags`, then prove the tag is absent on readback."""
+        """Call MCP `remove_tags`, then observe absence through a bounded readback."""
         self._call(
             "remove_tags",
             {"tag_urns": [tag_urn], "entity_urns": [entity_urn]},
         )
-        check = self.get_entities([entity_urn]).get(entity_urn, {})
-        return tag_urn not in _tag_urns(check)
+        return self._wait_for_tag_state(entity_urn, tag_urn, present=False)
+
+    def _wait_for_tag_state(
+        self,
+        entity_urn: str,
+        tag_urn: str,
+        *,
+        present: bool,
+    ) -> bool:
+        configured = os.environ.get("LINEAGE_MCP_MUTATION_READBACK_SECONDS", "8")
+        try:
+            timeout = min(max(float(configured), 0.0), 30.0)
+        except (TypeError, ValueError):
+            timeout = 8.0
+        deadline = time.monotonic() + timeout
+        while True:
+            check = self.get_entities([entity_urn]).get(entity_urn, {})
+            observed = tag_urn in _tag_urns(check)
+            if observed is present:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.4, remaining))
 
 
 def _tag_urns(entity: dict) -> list[str]:
