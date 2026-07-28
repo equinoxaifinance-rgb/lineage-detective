@@ -146,6 +146,7 @@ test("valid access consumes one budget unit and returns only provider text", asy
     assert.equal(url, "https://api.anthropic.com/v1/messages");
     assert.equal(init.headers["x-api-key"], "test-provider-key");
     const providerBody = JSON.parse(init.body);
+    assert.equal(providerBody.max_tokens, 3_000);
     assert.equal(providerBody.output_config.format.type, "json_schema");
     assert.equal(providerBody.output_config.format.schema.additionalProperties, false);
     assert.deepEqual(
