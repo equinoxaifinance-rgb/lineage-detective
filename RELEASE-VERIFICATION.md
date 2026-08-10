@@ -7,7 +7,7 @@ or universal production safety in an unknown customer environment.
 
 | Surface | Executed verification | Result |
 |---|---|---|
-| Complete Python suite | `python -m unittest discover -s tests -q` | 217 passed, 0 failed, 1 skipped |
+| Complete Python suite | `python -m unittest discover -s tests -q` | 217 total; 216 passed, 0 failed, 1 skipped |
 | Python dependencies | both `pip check` paths and hash-locked `pip-audit` | no broken requirements; runtime 0 known vulnerabilities; isolated sidecar 0 actionable vulnerabilities with 2 instances of the documented, unreachable `PYSEC-2026-3447` ignored |
 | Source and examples | compilation, security-boundary verifier, bound-example verifier | all passed |
 | Judge gateway | 10 Node tests, syntax, npm audit, dry-run packaging, live authenticated provider probe | passed; 0 npm vulnerabilities; schema-valid response hashed |

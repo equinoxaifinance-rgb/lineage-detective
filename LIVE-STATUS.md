@@ -32,7 +32,7 @@ This is the canonical state ledger. `Implemented`, `tested`, `deployed`,
 
 ## Green: tested
 
-- Canonical Python suite: **217 passed, 0 failed, 1 skipped**.
+- Canonical Python suite: **217 total: 216 passed, 0 failed, 1 skipped**.
 - All ten release-audit gates passed:
   - `pip check`;
   - hash-locked `pip-audit`;
