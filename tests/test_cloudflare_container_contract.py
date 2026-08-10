@@ -20,6 +20,19 @@ FULLSTACK_DOCKERFILE = (
 
 
 class CloudflareContainerContractTests(unittest.TestCase):
+    def test_cloudflare_tooling_stays_on_the_audited_wrangler_floor(self):
+        for directory in ("cloudflare-container", "judge-gateway"):
+            package = json.loads(
+                (ROOT / directory / "package.json").read_text(encoding="utf-8")
+            )
+            lock = json.loads(
+                (ROOT / directory / "package-lock.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(package["devDependencies"]["wrangler"], "4.120.0")
+            self.assertEqual(
+                lock["packages"]["node_modules/wrangler"]["version"], "4.120.0"
+            )
+
     def test_judge_runtime_is_named_bounded_and_large_enough_for_datahub(self):
         container = WRANGLER["containers"][0]
         self.assertEqual(container["max_instances"], 2)

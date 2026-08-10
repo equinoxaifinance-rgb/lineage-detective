@@ -1,4 +1,4 @@
-# Judge-facing Lineage Detective application environment — pinned 2026-07-25.
+# Judge-facing Lineage Detective application environment — pinned 2026-08-10.
 # It speaks MCP to the isolated DataHub sidecar; it does not import the DataHub
 # SDK/CLI or run packaging tooling. Keep the bootstrap installer itself on a
 # current audited release.
@@ -10,4 +10,7 @@ python-dotenv==1.2.2
 streamlit==1.59.2
 dbt-duckdb==1.10.1
 duckdb==1.5.4
+# Security floors for transitive dependencies used by Streamlit and TLS clients.
+cryptography==50.0.0
+gitpython==3.1.58
 setuptools==83.0.0

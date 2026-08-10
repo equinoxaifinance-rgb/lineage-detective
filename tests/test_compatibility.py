@@ -27,6 +27,31 @@ import datahub_mcp  # noqa: E402
 
 
 class CompatibilityBridgeTests(unittest.TestCase):
+    def test_quickstart_does_not_recursively_reenter_the_project_venv(self):
+        with patch.object(quickstart.sys, "prefix", str(ROOT / ".venv")), patch.object(
+            quickstart.subprocess, "run"
+        ) as run:
+            quickstart.enter_project_venv()
+        run.assert_not_called()
+
+    def test_quickstart_reexec_forces_utf8_for_windows_cli_output(self):
+        with patch.object(quickstart.sys, "prefix", str(ROOT / ".outside-venv")), patch.object(
+            quickstart.os.path, "exists", return_value=True
+        ), patch.object(quickstart.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            with self.assertRaises(SystemExit):
+                quickstart.enter_project_venv()
+        child_env = run.call_args.kwargs["env"]
+        self.assertEqual(child_env["PYTHONUTF8"], "1")
+        self.assertEqual(child_env["PYTHONIOENCODING"], "utf-8")
+
+    def test_prove_scenarios_selects_self_hosted_mode_before_agent_import(self):
+        source = (ROOT / "prove_scenarios.py").read_text(encoding="utf-8")
+        mode = 'os.environ.setdefault("LINEAGE_RUN_MODE", "self_hosted")'
+        self.assertIn(mode, source)
+        self.assertLess(source.index(mode), source.index("from agent import investigate"))
+        self.assertIn('reasoning_mode="evidence"', source)
+
     def test_quickstart_help_is_read_only_and_available_without_docker(self):
         result = subprocess.run(
             [sys.executable, str(ROOT / "quickstart.py"), "--help"],
@@ -41,13 +66,21 @@ class CompatibilityBridgeTests(unittest.TestCase):
 
     def test_runtime_requirements_keep_the_fixed_setuptools(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        runtime_lock = (ROOT / "requirements-runtime.lock").read_text(encoding="utf-8")
         self.assertIn("setuptools==83.0.0", requirements)
+        self.assertIn("cryptography==50.0.0", requirements)
+        self.assertIn("gitpython==3.1.58", requirements)
+        self.assertIn(
+            'pywin32==312 ; sys_platform == "win32" and python_version < "3.14"',
+            runtime_lock,
+        )
         self.assertNotIn("acryl-datahub", requirements)
 
     def test_datahub_packages_are_owned_by_the_sidecar(self):
         sidecar = (ROOT / "requirements-datahub-sidecar.txt").read_text(encoding="utf-8")
         self.assertIn("acryl-datahub==", sidecar)
         self.assertIn("mcp-server-datahub==", sidecar)
+        self.assertIn("cryptography==50.0.0", sidecar)
         self.assertIn("setuptools==81.0.0", sidecar)
 
     def test_auto_mode_uses_sidecar_when_upstream_rejects_fixed_runtime(self):

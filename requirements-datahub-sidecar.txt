@@ -1,6 +1,7 @@
-# Isolated DataHub bootstrap + official MCP-server sidecar — pinned 2026-07-25.
+# Isolated DataHub bootstrap + official MCP-server sidecar — pinned 2026-08-10.
 # DataHub 1.6.0.15 currently declares setuptools<82; see SECURITY.md.
 pip==26.1.2
 mcp-server-datahub==0.6.0
 acryl-datahub==1.6.0.15
+cryptography==50.0.0
 setuptools==81.0.0

@@ -44,7 +44,7 @@ permits `setuptools>=83`.
 4. `tools/verify_security_boundary.py` checks the repository does not contain
    Python packaging inputs and records both dependency boundaries.
 5. Release verification runs `pip check`, `pip-audit`, unit tests, and live
-   DataHub/MCP proofs. In the 2026-07-25 readback, the runtime audit was green;
+   DataHub/MCP proofs. In the 2026-08-10 readback, the runtime audit was green;
    the sidecar audit reported only `PYSEC-2026-3447` twice for the same
    `setuptools==81.0.0` distribution. The sidecar advisory remains explicit
    until upstream resolves it.

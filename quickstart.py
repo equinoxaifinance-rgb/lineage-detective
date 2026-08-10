@@ -41,7 +41,9 @@ def sidecar_mcp_command() -> str:
 
 def enter_project_venv() -> None:
     """Re-exec inside .venv so setup never mutates the caller's global Python."""
-    if os.environ.get("LINEAGE_DETECTIVE_IN_VENV") == "1":
+    current_prefix = os.path.normcase(os.path.realpath(sys.prefix))
+    target_prefix = os.path.normcase(os.path.realpath(VENV))
+    if current_prefix == target_prefix:
         return
     py = venv_python()
     if not os.path.exists(py):
@@ -50,8 +52,12 @@ def enter_project_venv() -> None:
         if result.returncode != 0:
             die("Could not create .venv. Install Python with the venv module, then re-run.")
     env = dict(os.environ)
-    env["LINEAGE_DETECTIVE_IN_VENV"] = "1"
     env["PATH"] = os.path.dirname(py) + os.pathsep + env.get("PATH", "")
+    # Detached PowerShell logs commonly inherit the legacy Windows cp1252
+    # code page. DataHub's CLI prints Unicode status glyphs, so force the
+    # re-executed quickstart and every child it launches onto UTF-8.
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     raise SystemExit(
         subprocess.run(
             [py, os.path.abspath(__file__), *sys.argv[1:]],

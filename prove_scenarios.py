@@ -1,6 +1,9 @@
 """prove_scenarios.py — run the agent against all THREE distinct incident types and verify it
 autonomously fingers the correct root cause for each. Proof of generalizability, not one trick."""
-import sys, os
+import os
+import sys
+
+os.environ.setdefault("LINEAGE_RUN_MODE", "self_hosted")
 sys.path.insert(0, "src")
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -22,7 +25,12 @@ CASES = [
 
 passed = 0
 for label, symptom, urn, expect_root in CASES:
-    r = investigate(symptom, urn, server="http://localhost:8080")
+    r = investigate(
+        symptom,
+        urn,
+        server="http://localhost:8080",
+        reasoning_mode="evidence",
+    )
     suspects = r.get("suspects", [])
     top = suspects[0] if suspects else {}
     top_urn = top.get("urn", "")

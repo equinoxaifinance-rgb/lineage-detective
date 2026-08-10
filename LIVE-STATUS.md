@@ -1,6 +1,6 @@
 # Lineage Detective release state
 
-Last reconciled: 2026-07-28 EDT
+Last reconciled: 2026-08-10 EDT
 
 This is the canonical state ledger. `Implemented`, `tested`, `deployed`,
 `published`, and `submitted` are intentionally separate.
@@ -32,7 +32,7 @@ This is the canonical state ledger. `Implemented`, `tested`, `deployed`,
 
 ## Green: tested
 
-- Canonical Python suite: **213 passed, 0 failed**.
+- Canonical Python suite: **217 passed, 0 failed, 1 skipped**.
 - All ten release-audit gates passed:
   - `pip check`;
   - hash-locked `pip-audit`;
@@ -44,6 +44,13 @@ This is the canonical state ledger. `Implemented`, `tested`, `deployed`,
   - both Worker syntax checks.
 - Judge gateway: **10 Node tests passed**, including dynamic evidence-URN
   constraints; a real authenticated provider call returned schema-valid JSON.
+- Both npm audits report **0 vulnerabilities** after moving the checked-in
+  Wrangler packages and locks to `4.120.0`.
+- Both Python environments pass `pip check`. The runtime audit reports zero
+  known vulnerabilities. The isolated DataHub sidecar ignores only the two
+  lock occurrences of `PYSEC-2026-3447`, whose affected macOS source-package
+  publishing path is outside this Windows/Linux application topology and whose
+  fixed setuptools release is rejected by the pinned upstream DataHub package.
 - Hostile paths cover malformed model output, unobserved URNs, authentication,
   limits, redirects, MCP timeouts, concurrent writers, stale locks, source
   drift, rollback failure, receipt tampering, and partial connector outcomes.
@@ -72,6 +79,10 @@ This is the canonical state ledger. `Implemented`, `tested`, `deployed`,
   - exact-byte implementation hash matched;
   - JSON sandbox receipt, JSON implementation receipt, and valid handoff ZIP
     downloaded with zero browser-console errors.
+- A fresh 2026-08-10 public run independently reconfirmed the complete path at
+  100% with three live entities, a containment write/readback, sandbox
+  freshness verification, exact-byte apply, handoff generation, and a
+  hash-verified restore of the original backup.
 
 ## Green: published and submitted
 
@@ -84,9 +95,12 @@ This is the canonical state ledger. `Implemented`, `tested`, `deployed`,
 - Devpost submission `1077519` was read back in submitted state with the final
   tagline, thumbnail, video, private judge URL, sample-output URL, category,
   and DataHub technology selections.
-- The optional upstream-contribution bonus is intentionally left blank. This
-  entry is a DataHub application, not a contribution submitted upstream to the
-  DataHub project.
+- The evidence-backed DataHub incident-response skill was submitted upstream as
+  <https://github.com/datahub-project/datahub-skills/pull/135>. Devpost's
+  contribution field contains that exact URL, and the submitted 5/5 state was
+  independently read back after saving. The PR is open and mergeable; its
+  first-time-contributor workflow still awaits maintainer approval, and review,
+  merge, and bonus credit remain external yellow gates.
 
 ## Owner-controlled facts
 
